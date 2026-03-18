@@ -4,7 +4,6 @@
 
 It helps security, AppSec, SecOps, DevSecOps and platform teams identify what should never have reached logs in the first place.
 
----
 
 ## 🔥 Features
 
@@ -24,14 +23,12 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
   - Markdown summary
 - Built-in **demo/fixture datasets** for safe testing and screenshots
 
----
 
 ## 🧱 Built with
 
 - [Microsoft Presidio](https://github.com/microsoft/presidio) – PII detection and analysis  
 - Python 3.10+  
 
----
 
 ## 🧩 Supported providers
 
@@ -44,7 +41,6 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - Splunk  
 - New Relic  
 
----
 
 ## 🎯 Use cases
 
@@ -55,7 +51,6 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - Investigating incidents involving data exposure  
 - Post-deployment validation (detect leaks after release)
 
----
 
 ## 🧠 Positioning
 
@@ -66,7 +61,6 @@ PII Leak Hunter is:
 - **Compliance-supportive** (PCI DSS, GDPR, SOC 2, HIPAA, ISO 27001)
 - **Provider-agnostic** (Coralogix-first, multi-provider roadmap)
 
----
 
 ## 🚫 What it is not
 
@@ -75,7 +69,6 @@ PII Leak Hunter is:
 - Not an auto-remediation system  
 - Not limited to fintech  
 
----
 
 ## ⚡ Quick start
 
@@ -91,7 +84,6 @@ source .venv/bin/activate
 pip install -e .
 ```
 
----
 
 ### 2. Configure
 
@@ -102,7 +94,6 @@ export CORALOGIX_API_KEY=your_api_key
 export CORALOGIX_REGION=your_region
 ```
 
----
 
 ### 3. Run scan (Coralogix)
 
@@ -110,7 +101,6 @@ export CORALOGIX_REGION=your_region
 pii-leak-hunter scan   --query 'source:"mailer-service"'   --from '-24h'   --out-json findings.json   --out-csv findings.csv   --fail-on critical
 ```
 
----
 
 ### 4. Run UI (Streamlit)
 
@@ -118,7 +108,6 @@ pii-leak-hunter scan   --query 'source:"mailer-service"'   --from '-24h'   --out
 streamlit run pii_leak_hunter/app.py
 ```
 
----
 
 ### 5. Scan local logs
 
@@ -126,7 +115,6 @@ streamlit run pii_leak_hunter/app.py
 pii-leak-hunter scan-file logs.ndjson
 ```
 
----
 
 ## 📊 Example findings
 
@@ -136,7 +124,6 @@ pii-leak-hunter scan-file logs.ndjson
 - Identity bundle (name + DOB + SSN) → **critical**
 - Secret + PII in same payload → **critical**
 
----
 
 ## 🔐 Safety
 
@@ -151,7 +138,6 @@ To show raw values (not recommended):
 --unsafe-show-values
 ```
 
----
 
 ## 🧱 Detection approach
 
@@ -165,7 +151,6 @@ PII Leak Hunter combines:
 
 This avoids the limitations of regex-only tools.
 
----
 
 ## 🧪 Demo & screenshots
 
@@ -177,7 +162,6 @@ The repository includes **synthetic datasets** for:
 
 No real sensitive data is included.
 
----
 
 ## 🛣 Roadmap
 
@@ -190,7 +174,6 @@ No real sensitive data is included.
 - [ ] CI/CD integration templates  
 - [ ] Advanced detection tuning  
 
----
 
 ## 🤝 Contributing
 
@@ -208,7 +191,6 @@ Please ensure:
 - all new logic includes tests
 - changes remain simple (KISS)
 
----
 
 ## 📄 License
 
