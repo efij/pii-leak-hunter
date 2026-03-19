@@ -1,9 +1,18 @@
 # PII Leak Hunter
 
-**PII Leak Hunter** is an open-source tool for detecting **PII leaks, masking failures, and sensitive data exposure in logs**.
+**PII Leak Hunter** is an open-source tool for detecting **PII leaks, masking failures, cloud and infrastructure secrets, and dangerous exposure patterns** across logs, files, SaaS records, and operational data sources.
 
 It helps security, AppSec, SecOps, DevSecOps and platform teams identify what should never have reached logs in the first place.
 
+## Highlights
+
+- Detect PII, cloud secrets, infra secrets, and composite exposures.
+- Correlate higher-risk scenarios like credential bundles, masking failures, secret+PII overlap, and control-plane leaks.
+- Scan local files, compressed archives, databases, object storage, log platforms, and selected SaaS sources.
+- Export safe reports, SARIF, and evidence packs for triage, PRs, and security reviews.
+- Track least-privilege guidance and use baseline/diff mode to focus on new leaks.
+
+---
 
 ## 🔥 Features
 
@@ -11,6 +20,7 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - Detect **masking failures** (partial or broken redaction)
 - Detect **identity bundles** (KYC-level exposure)
 - Detect **secrets + PII combinations**
+- Detect **cloud and infrastructure secrets** (AWS keys, ARNs, Secrets Manager references, Kubernetes tokens, private keys, IaC tokens)
 - **PII detection powered by [Microsoft Presidio](https://github.com/microsoft/presidio) + custom NLP recognizers**
 - **Presidio-powered detection + custom recognizers**
 - **Safe previews by default** (no raw sensitive data exposed)
@@ -23,24 +33,33 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
   - Markdown summary
 - Built-in **demo/fixture datasets** for safe testing and screenshots
 
+---
 
 ## 🧱 Built with
 
 - [Microsoft Presidio](https://github.com/microsoft/presidio) – PII detection and analysis  
 - Python 3.10+  
 
+---
 
 ## 🧩 Supported providers
 
 ### Current
 - **Coralogix** (v1)
+- **Datadog**
+- **Dynatrace**
+- **Splunk**
+- **New Relic**
+- **ServiceNow**
+- **Notion**
 
 ### Coming soon
-- Datadog  
-- Dynatrace  
-- Splunk  
-- New Relic  
+- Additional provider tuning and provider-specific query helpers  
+- monday.com
+- Microsoft Teams
+- Intercom
 
+---
 
 ## 🎯 Use cases
 
@@ -51,6 +70,7 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - Investigating incidents involving data exposure  
 - Post-deployment validation (detect leaks after release)
 
+---
 
 ## 🧠 Positioning
 
@@ -61,6 +81,16 @@ PII Leak Hunter is:
 - **Compliance-supportive** (PCI DSS, GDPR, SOC 2, HIPAA, ISO 27001)
 - **Provider-agnostic** (Coralogix-first, multi-provider roadmap)
 
+---
+
+## 🚫 What it is not
+
+- Not a SIEM  
+- Not a DSPM platform  
+- Not an auto-remediation system  
+- Not limited to fintech  
+
+---
 
 ## ⚡ Quick start
 
@@ -76,6 +106,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+---
 
 ### 2. Configure
 
@@ -86,6 +117,29 @@ export CORALOGIX_API_KEY=your_api_key
 export CORALOGIX_REGION=your_region
 ```
 
+Other supported providers use these environment variables:
+
+```bash
+# Datadog
+export DATADOG_API_KEY=your_api_key
+export DATADOG_APP_KEY=your_application_key
+export DATADOG_SITE=datadoghq.com
+
+# Dynatrace
+export DYNATRACE_API_TOKEN=your_api_token
+export DYNATRACE_ENV_URL=https://your-environment.live.dynatrace.com
+
+# Splunk
+export SPLUNK_BASE_URL=https://your-splunk-host:8089
+export SPLUNK_TOKEN=your_token
+
+# New Relic
+export NEW_RELIC_API_KEY=your_user_key
+export NEW_RELIC_ACCOUNT_ID=1234567
+export NEW_RELIC_REGION=us
+```
+
+---
 
 ### 3. Run scan (Coralogix)
 
@@ -93,13 +147,35 @@ export CORALOGIX_REGION=your_region
 pii-leak-hunter scan   --query 'source:"mailer-service"'   --from '-24h'   --out-json findings.json   --out-csv findings.csv   --fail-on critical
 ```
 
+Run scan with another provider:
+
+```bash
+pii-leak-hunter scan \
+  --provider datadog \
+  --query 'service:mailer-service' \
+  --from '-24h'
+```
+
+Run scan with a unified target:
+
+```bash
+pii-leak-hunter scan fixtures/demo_logs.ndjson
+pii-leak-hunter scan file:///absolute/path/to/logs/
+pii-leak-hunter scan postgres://user:pass@host:5432/dbname?schema=public&row_limit=1000
+pii-leak-hunter scan s3://bucket/path/to/logs/
+pii-leak-hunter scan 'servicenow://acme.service-now.com?table=incident&query=active=true'
+pii-leak-hunter scan 'notion://workspace?query=prod&page_size=25'
+```
+
+---
 
 ### 4. Run UI (Streamlit)
 
 ```bash
-streamlit run pii_leak_hunter/app.py
+streamlit run pii_leak_hunter/ui/app.py
 ```
 
+---
 
 ### 5. Scan local logs
 
@@ -107,6 +183,64 @@ streamlit run pii_leak_hunter/app.py
 pii-leak-hunter scan-file logs.ndjson
 ```
 
+`scan-file` also supports directories and compressed inputs:
+
+```bash
+pii-leak-hunter scan-file ./logs/
+pii-leak-hunter scan-file ./rotated/app.ndjson.gz
+pii-leak-hunter scan-file ./archives/logs.zip
+```
+
+Baseline / diff mode:
+
+```bash
+pii-leak-hunter scan-file fixtures/demo_logs.ndjson --baseline-out baseline.json
+pii-leak-hunter scan-file fixtures/demo_logs.ndjson --baseline-in baseline.json --new-only
+```
+
+Evidence pack export:
+
+```bash
+pii-leak-hunter scan-file fixtures/demo_logs.ndjson --out-evidence evidence.zip
+```
+
+Least-privilege presets:
+
+```bash
+pii-leak-hunter least-privilege servicenow
+pii-leak-hunter least-privilege notion
+```
+
+### 6. Run with Docker
+
+Build the image:
+
+```bash
+docker build -t pii-leak-hunter .
+```
+
+Run the CLI:
+
+```bash
+docker run --rm \
+  -e DATADOG_API_KEY \
+  -e DATADOG_APP_KEY \
+  -e DATADOG_SITE \
+  pii-leak-hunter \
+  pii-leak-hunter scan --provider datadog --query 'service:mailer-service' --from '-24h'
+```
+
+Run the Streamlit UI:
+
+```bash
+docker run --rm -p 8501:8501 \
+  -e CORALOGIX_API_KEY \
+  -e CORALOGIX_REGION \
+  pii-leak-hunter \
+  streamlit run pii_leak_hunter/ui/app.py --server.address=0.0.0.0
+```
+
+---
 
 ## 📊 Example findings
 
@@ -115,7 +249,10 @@ pii-leak-hunter scan-file logs.ndjson
 - IBAN with beneficiary context → **high**
 - Identity bundle (name + DOB + SSN) → **critical**
 - Secret + PII in same payload → **critical**
+- AWS access key + secret key in one record → **critical**
+- Kubernetes API endpoint + bearer token → **critical**
 
+---
 
 ## 🔐 Safety
 
@@ -130,6 +267,7 @@ To show raw values (not recommended):
 --unsafe-show-values
 ```
 
+---
 
 ## 🧱 Detection approach
 
@@ -140,9 +278,15 @@ PII Leak Hunter combines:
 - Field-based heuristics
 - Multi-entity correlation
 - Custom fintech-aware recognizers
+- Cloud/infra secret classification
+- Blast-radius tagging and remediation hints
+- Exploitability-first prioritization
+- Baseline/diff workflow
+- Exportable evidence packs
 
 This avoids the limitations of regex-only tools.
 
+---
 
 ## 🧪 Demo & screenshots
 
@@ -154,18 +298,25 @@ The repository includes **synthetic datasets** for:
 
 No real sensitive data is included.
 
+---
 
 ## 🛣 Roadmap
 
 - [x] Coralogix provider  
+- [x] Datadog provider  
+- [x] Dynatrace provider  
+- [x] Splunk provider  
+- [x] New Relic provider  
 - [x] CLI + Streamlit UI  
-- [ ] Datadog provider  
-- [ ] Dynatrace provider  
-- [ ] Splunk provider  
-- [ ] New Relic provider  
+- [x] ServiceNow source
+- [x] Notion source
+- [x] Baseline / diff mode
+- [x] Evidence packs
+- [x] Least-privilege presets
 - [ ] CI/CD integration templates  
 - [ ] Advanced detection tuning  
 
+---
 
 ## 🤝 Contributing
 
@@ -183,6 +334,7 @@ Please ensure:
 - all new logic includes tests
 - changes remain simple (KISS)
 
+---
 
 ## 📄 License
 

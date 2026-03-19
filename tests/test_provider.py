@@ -1,7 +1,17 @@
 import httpx
 
 from pii_leak_hunter.providers.coralogix import CoralogixProvider
-from pii_leak_hunter.utils.config import CoralogixConfig
+from pii_leak_hunter.providers.datadog import DatadogProvider
+from pii_leak_hunter.providers.dynatrace import DynatraceProvider
+from pii_leak_hunter.providers.new_relic import NewRelicProvider
+from pii_leak_hunter.providers.splunk import SplunkProvider
+from pii_leak_hunter.utils.config import (
+    CoralogixConfig,
+    DatadogConfig,
+    DynatraceConfig,
+    NewRelicConfig,
+    SplunkConfig,
+)
 
 
 def test_coralogix_provider_retries_and_paginates() -> None:
@@ -38,3 +48,119 @@ def test_coralogix_provider_retries_and_paginates() -> None:
     assert attempts["count"] == 3
     assert len(records) == 2
     assert records[0].source == "coralogix"
+
+
+def test_datadog_provider_uses_logs_list_api() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/logs-queries/list"
+        body = request.read().decode("utf-8")
+        assert "service:mailer" in body
+        return httpx.Response(
+            200,
+            json={
+                "logs": [
+                    {"message": "api_key=sk_live_FAKESECRET123 email=owner@example.test", "timestamp": "2026-03-18T00:00:00Z"}
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = DatadogProvider(
+        DatadogConfig(
+            api_key="api",
+            app_key="app",
+            site="datadoghq.com",
+            base_url="https://api.datadoghq.com",
+        ),
+        client=client,
+    )
+    records = provider.fetch(query="service:mailer", start="-1h", end="now")
+    assert len(records) == 1
+    assert records[0].source == "datadog"
+
+
+def test_dynatrace_provider_uses_next_page_key() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            assert request.url.path == "/api/v2/logs/export"
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"content": "first", "timestamp": "2026-03-18T00:00:00Z"}],
+                    "nextPageKey": "next-page",
+                },
+            )
+        assert "nextPageKey=next-page" in str(request.url)
+        return httpx.Response(
+            200,
+            json={"results": [{"content": "second", "timestamp": "2026-03-18T00:00:01Z"}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = DynatraceProvider(
+        DynatraceConfig(api_token="token", environment_url="https://tenant.live.dynatrace.com"),
+        client=client,
+    )
+    records = provider.fetch(query='contains(content, "mailer")', start="-1h", end="now")
+    assert len(records) == 2
+    assert records[1].source == "dynatrace"
+
+
+def test_splunk_provider_parses_export_stream() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/services/search/v2/jobs/export"
+        body = request.read().decode("utf-8")
+        assert "search=search+index%3Dmain" in body
+        return httpx.Response(
+            200,
+            text='\n'.join(
+                [
+                    '{"result":{"_raw":"customer_ssn=123-45-6789","_time":"2026-03-18T00:00:00Z"}}',
+                    '{"result":{"_raw":"done","_time":"2026-03-18T00:00:01Z"}}',
+                ]
+            ),
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = SplunkProvider(
+        SplunkConfig(base_url="https://splunk.example.com:8089", token="token"),
+        client=client,
+    )
+    records = provider.fetch(query="index=main", start="-1h", end="now")
+    assert len(records) == 2
+    assert records[0].source == "splunk"
+
+
+def test_new_relic_provider_builds_nrql_query() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.newrelic.com/graphql"
+        payload = request.read().decode("utf-8")
+        assert "SELECT * FROM Log WHERE `service.name` = 'mailer-service' SINCE 24 hours ago UNTIL NOW LIMIT 200" in payload
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "actor": {
+                        "account": {
+                            "nrql": {
+                                "results": [
+                                    {"message": "owner@example.test", "timestamp": "2026-03-18T00:00:00Z"}
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = NewRelicProvider(
+        NewRelicConfig(api_key="api-key", account_id=12345, region="us", base_url="https://api.newrelic.com/graphql"),
+        client=client,
+    )
+    records = provider.fetch(query="`service.name` = 'mailer-service'", start="-24h", end="now")
+    assert len(records) == 1
+    assert records[0].source == "newrelic"

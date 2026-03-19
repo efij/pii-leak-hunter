@@ -10,8 +10,8 @@ from pii_leak_hunter.loader.file_loader import load_file
 from pii_leak_hunter.output.csv_writer import write_csv
 from pii_leak_hunter.output.json_writer import write_json
 from pii_leak_hunter.output.markdown_writer import write_markdown
-from pii_leak_hunter.providers.coralogix import CoralogixProvider
-from pii_leak_hunter.utils.config import ConfigurationError, CoralogixConfig
+from pii_leak_hunter.providers.factory import SUPPORTED_PROVIDERS, build_provider, normalize_provider_name
+from pii_leak_hunter.utils.config import ConfigurationError
 
 try:
     import streamlit as st
@@ -24,7 +24,7 @@ def run_app() -> None:
     st.title("PII Leak Hunter")
     st.caption("Read-only log scanning for PII leaks, masking failures, and secret overlap.")
 
-    source_mode = st.radio("Source", ["Local file", "Coralogix"], horizontal=True)
+    source_mode = st.radio("Source", ["Local file", "Remote provider"], horizontal=True)
     unsafe_show_values = st.checkbox("Unsafe: show raw values", value=False)
 
     if source_mode == "Local file":
@@ -33,17 +33,24 @@ def run_app() -> None:
             result = _scan_uploaded_file(uploaded)
             _render_result(result, unsafe_show_values=unsafe_show_values)
     else:
-        query = st.text_input("Query", value='source:"mailer-service"')
+        provider_name = st.selectbox("Provider", options=list(SUPPORTED_PROVIDERS), index=0)
+        query = st.text_input("Query", value=_default_query(provider_name))
         start = st.text_input("From", value="-24h")
         end = st.text_input("To", value="now")
-        if st.button("Scan Coralogix", type="primary"):
+        if st.button("Scan remote logs", type="primary"):
             try:
-                provider = CoralogixProvider(CoralogixConfig.from_env())
+                provider = build_provider(provider_name)
                 records = provider.fetch(query=query, start=start, end=end)
                 result = Pipeline().run(
                     records,
-                    source="coralogix",
-                    metadata={"mode": "coralogix", "query": query, "from": start, "to": end},
+                    source=normalize_provider_name(provider_name),
+                    metadata={
+                        "mode": "remote",
+                        "provider": normalize_provider_name(provider_name),
+                        "query": query,
+                        "from": start,
+                        "to": end,
+                    },
                 )
                 _render_result(result, unsafe_show_values=unsafe_show_values)
             except ConfigurationError as exc:
@@ -123,6 +130,17 @@ def _write_temp_export(kind: str, result: ScanResult, include_values: bool) -> P
     else:
         raise ValueError(f"Unsupported export kind: {kind}")
     return temp_path
+
+
+def _default_query(provider_name: str) -> str:
+    defaults = {
+        "coralogix": 'source:"mailer-service"',
+        "datadog": "service:mailer-service",
+        "dynatrace": 'contains(content, "mailer-service")',
+        "splunk": 'index=main service="mailer-service"',
+        "newrelic": "`service.name` = 'mailer-service'",
+    }
+    return defaults.get(normalize_provider_name(provider_name), "*")
 
 
 if __name__ == "__main__":

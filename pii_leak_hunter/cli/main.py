@@ -11,9 +11,9 @@ from pii_leak_hunter.output.csv_writer import write_csv
 from pii_leak_hunter.output.json_writer import write_json
 from pii_leak_hunter.output.markdown_writer import write_markdown
 from pii_leak_hunter.output.sarif_writer import write_sarif
-from pii_leak_hunter.providers.coralogix import CoralogixProvider
+from pii_leak_hunter.providers.factory import SUPPORTED_PROVIDERS, build_provider, normalize_provider_name
 from pii_leak_hunter.scoring.risk import exceeds_threshold
-from pii_leak_hunter.utils.config import ConfigurationError, CoralogixConfig
+from pii_leak_hunter.utils.config import ConfigurationError
 
 app = typer.Typer(help="Detect PII leaks and masking failures in logs.")
 
@@ -50,6 +50,7 @@ def scan_file(
 
 @app.command("scan")
 def scan(
+    provider: str = typer.Option("coralogix", "--provider"),
     query: str = typer.Option(..., "--query"),
     from_: str = typer.Option(..., "--from"),
     to: str = typer.Option("now", "--to"),
@@ -60,15 +61,19 @@ def scan(
     fail_on: str | None = typer.Option(None, "--fail-on"),
     unsafe_show_values: bool = typer.Option(False, "--unsafe-show-values"),
 ) -> None:
-    """Scan logs from Coralogix."""
+    """Scan logs from a supported remote provider."""
     try:
-        config = CoralogixConfig.from_env()
-        provider = CoralogixProvider(config)
-        records = provider.fetch(query=query, start=from_, end=to)
+        provider_name = normalize_provider_name(provider)
+        if provider_name not in SUPPORTED_PROVIDERS:
+            raise typer.BadParameter(
+                f"provider must be one of {', '.join(SUPPORTED_PROVIDERS)}"
+            )
+        client = build_provider(provider_name)
+        records = client.fetch(query=query, start=from_, end=to)
         result = Pipeline().run(
             records,
-            source="coralogix",
-            metadata={"mode": "coralogix", "query": query, "from": from_, "to": to},
+            source=provider_name,
+            metadata={"mode": "remote", "provider": provider_name, "query": query, "from": from_, "to": to},
         )
         _emit_outputs(
             result,
