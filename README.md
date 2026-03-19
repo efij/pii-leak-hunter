@@ -62,14 +62,6 @@ PII Leak Hunter is:
 - **Provider-agnostic** (Coralogix-first, multi-provider roadmap)
 
 
-## 🚫 What it is not
-
-- Not a SIEM  
-- Not a DSPM platform  
-- Not an auto-remediation system  
-- Not limited to fintech  
-
-
 ## ⚡ Quick start
 
 ### 1. Install
