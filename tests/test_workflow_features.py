@@ -5,9 +5,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from pii_leak_hunter.cli.main import app
-from pii_leak_hunter.core.baseline import apply_baseline, write_baseline
+from pii_leak_hunter.core.baseline import apply_baseline, apply_baseline_payload, write_baseline
 from pii_leak_hunter.core.models import DetectionResult, Finding, ScanResult
 from pii_leak_hunter.output.evidence_pack import write_evidence_pack
+from pii_leak_hunter.output.html_writer import write_html_report
+from pii_leak_hunter.ui.presentation import build_diff_summary, group_findings
 
 
 def test_baseline_marks_existing_and_new_findings(tmp_path: Path) -> None:
@@ -85,3 +87,159 @@ def test_scan_file_supports_baseline_and_evidence_pack(tmp_path: Path) -> None:
     assert second.exit_code == 0
     assert evidence_path.exists()
     assert "Baseline: new=0" in second.stdout
+
+
+def test_baseline_payload_from_safe_scan_tracks_resolved_findings() -> None:
+    current = ScanResult(
+        findings=[
+            Finding(
+                id="keep",
+                record_id="r1",
+                type="entity_detection",
+                severity="high",
+                entities=[
+                    DetectionResult(
+                        entity_type="AWS_ACCESS_KEY_ID",
+                        start=0,
+                        end=20,
+                        score=0.9,
+                        value_hash="hash-a",
+                        masked_preview="AKIA************",
+                    )
+                ],
+                context={},
+                source="unit",
+                safe_summary="AWS key detected.",
+            )
+        ],
+        records_scanned=1,
+        source="unit",
+    )
+    baseline = ScanResult(
+        findings=[
+            current.findings[0],
+            Finding(
+                id="resolved",
+                record_id="r2",
+                type="entity_detection",
+                severity="medium",
+                entities=[
+                    DetectionResult(
+                        entity_type="EMAIL_ADDRESS",
+                        start=0,
+                        end=4,
+                        score=0.8,
+                        value_hash="hash-b",
+                        masked_preview="mail=***",
+                    )
+                ],
+                context={},
+                source="unit",
+                safe_summary="Email detected.",
+            ),
+        ],
+        records_scanned=2,
+        source="unit",
+    )
+
+    updated = apply_baseline_payload(current, baseline.to_safe_dict())
+    diff = build_diff_summary(updated)
+
+    assert updated.findings[0].context["baseline_status"] == "existing"
+    assert diff.new == 0
+    assert diff.unchanged == 1
+    assert diff.resolved == 1
+
+
+def test_group_findings_clusters_repeated_hashes() -> None:
+    findings = [
+        Finding(
+            id="1",
+            record_id="r1",
+            type="entity_detection",
+            severity="high",
+            entities=[
+                DetectionResult(
+                    entity_type="API_KEY",
+                    start=0,
+                    end=8,
+                    score=0.9,
+                    value_hash="same-hash",
+                    masked_preview="key=***",
+                )
+            ],
+            context={"exploitability_priority": "P2"},
+            source="unit",
+            safe_summary="API key detected.",
+        ),
+        Finding(
+            id="2",
+            record_id="r2",
+            type="entity_detection",
+            severity="medium",
+            entities=[
+                DetectionResult(
+                    entity_type="API_KEY",
+                    start=0,
+                    end=8,
+                    score=0.7,
+                    value_hash="same-hash",
+                    masked_preview="key=***",
+                )
+            ],
+            context={"exploitability_priority": "P3"},
+            source="unit",
+            safe_summary="API key detected again.",
+        ),
+    ]
+
+    groups = group_findings(findings)
+
+    assert len(groups) == 1
+    assert groups[0].count == 2
+    assert groups[0].priority == "P2"
+
+
+def test_html_report_masks_raw_values_and_renders_risk_context(tmp_path: Path) -> None:
+    result = ScanResult(
+        findings=[
+            Finding(
+                id="1",
+                record_id="rec-1",
+                type="credential_bundle",
+                severity="critical",
+                entities=[
+                    DetectionResult(
+                        entity_type="AWS_SECRET_ACCESS_KEY",
+                        start=0,
+                        end=20,
+                        score=0.99,
+                        value_hash="hash-secret",
+                        masked_preview="aws_secret=****ABCD",
+                        raw_value="super-secret-value",
+                    )
+                ],
+                context={
+                    "exploitability_priority": "P0",
+                    "policy_tags": ["cloud", "credential"],
+                    "blast_radius": "cloud-account",
+                    "risk_reasons": ["The exposed value grants direct cloud or storage access."],
+                    "remediation": ["Rotate the exposed credential or token immediately."],
+                },
+                source="unit",
+                safe_summary="AWS credential material exposed together.",
+            )
+        ],
+        records_scanned=1,
+        source="unit",
+    )
+
+    report_path = tmp_path / "report.html"
+    write_html_report(result, str(report_path), include_values=False)
+    html = report_path.read_text(encoding="utf-8")
+
+    assert "PII Leak Hunter Audit Report" in html
+    assert "Exploitability Ladder" in html
+    assert "Rotate the exposed credential or token immediately." in html
+    assert "aws_secret=****ABCD" in html
+    assert "super-secret-value" not in html

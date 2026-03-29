@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [3.0.0] - 2026-03-30
+
+### Added
+- A polished Streamlit web console for scanning, grouped triage, least-privilege guidance, and report export.
+- A self-contained HTML audit report with severity totals, exploitability ladder, grouped findings, masked evidence, remediation, and print-friendly styling.
+- Shared presentation helpers for grouped finding views and exploitability/entity summaries.
+- Baseline artifact upload support in the web console, including safe JSON scan payloads and evidence pack zip files.
+- Richer baseline diff metadata with `new`, `unchanged`, and `resolved` counts.
+
+### Changed
+- The web UI now supports grouped findings, baseline-aware filtering, and report downloads that follow the active findings view.
+- Baseline handling now accepts both classic baseline signature files and safe exported finding payloads.
+- Documentation now reflects the Streamlit web console and HTML audit report workflow.
+
 ## [2.5.0] - 2026-03-29
 
 ### Added

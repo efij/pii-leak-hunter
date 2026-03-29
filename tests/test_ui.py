@@ -11,6 +11,12 @@ def test_ui_render_smoke(monkeypatch) -> None:
     calls: list[str] = []
 
     class FakeColumn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
         def metric(self, label, value):
             calls.append(f"metric:{label}:{value}")
 
@@ -22,12 +28,37 @@ def test_ui_render_smoke(monkeypatch) -> None:
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    class FakeSessionState(dict):
+        pass
+
     class FakeStreamlit:
+        session_state = FakeSessionState()
+
         def columns(self, count):
-            return [FakeColumn() for _ in range(count)]
+            if isinstance(count, int):
+                size = count
+            else:
+                size = len(count)
+            return [FakeColumn() for _ in range(size)]
 
         def multiselect(self, *args, **kwargs):
-            return ["critical", "high", "medium", "low"]
+            if "Severity" in args:
+                return ["critical", "high", "medium", "low"]
+            if "Exploitability" in args:
+                return ["P0", "P1", "P2", "P3", "P4"]
+            return ["current"]
+
+        def checkbox(self, *args, **kwargs):
+            return kwargs.get("value", False)
+
+        def selectbox(self, label, options, format_func=None, **kwargs):
+            return options[0]
+
+        def markdown(self, *args, **kwargs):
+            calls.append("markdown")
+
+        def caption(self, value):
+            calls.append(f"caption:{value}")
 
         def dataframe(self, *args, **kwargs):
             calls.append("dataframe")
@@ -51,6 +82,12 @@ def test_ui_render_smoke(monkeypatch) -> None:
         def success(self, value):
             calls.append("success")
 
+        def warning(self, value):
+            calls.append("warning")
+
+        def info(self, value):
+            calls.append("info")
+
     monkeypatch.setattr(app_module, "st", FakeStreamlit())
     result = ScanResult(
         findings=[
@@ -69,7 +106,7 @@ def test_ui_render_smoke(monkeypatch) -> None:
                         masked_preview="user=***",
                     )
                 ],
-                context={},
+                context={"exploitability_priority": "P2"},
                 source="fixture",
                 safe_summary="Email detected.",
             )
@@ -81,3 +118,4 @@ def test_ui_render_smoke(monkeypatch) -> None:
     app_module._render_result(result)
     assert "dataframe" in calls
     assert "download" in calls
+    assert "json" in calls

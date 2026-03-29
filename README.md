@@ -9,7 +9,8 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - Detect PII, cloud secrets, infra secrets, and composite exposures.
 - Correlate higher-risk scenarios like credential bundles, masking failures, secret+PII overlap, and control-plane leaks.
 - Scan local files, compressed archives, databases, object storage, log platforms, and selected SaaS sources.
-- Export safe reports, SARIF, and evidence packs for triage, PRs, and security reviews.
+- Triage findings in a polished Streamlit web console with grouped findings, baseline diff, and least-privilege guidance.
+- Export safe HTML audit reports, SARIF, and evidence packs for triage, PRs, and security reviews.
 - Track least-privilege guidance and use baseline/diff mode to focus on new leaks.
 
 ---
@@ -25,12 +26,15 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - **Presidio-powered detection + custom recognizers**
 - **Safe previews by default** (no raw sensitive data exposed)
 - **CLI for automation, CI/CD, and scripting**
-- **Streamlit UI for triage, demos, and screenshots**
+- **Streamlit web console** for triage, grouped findings, and baseline comparison
+- **Static HTML audit report** with masked evidence, exploitability ladder, and print-friendly layout
 - Output formats:
   - JSON
   - CSV
   - SARIF
   - Markdown summary
+  - HTML audit report
+  - Evidence pack (`.zip`)
 - Built-in **demo/fixture datasets** for safe testing and screenshots
 
 ---
@@ -97,7 +101,7 @@ PII Leak Hunter is:
 ### 1. Install
 
 ```bash
-git clone https://github.com/your-org/pii-leak-hunter.git
+git clone https://github.com/efij/pii-leak-hunter.git
 cd pii-leak-hunter
 
 python -m venv .venv
@@ -175,6 +179,15 @@ pii-leak-hunter scan 'notion://workspace?query=prod&page_size=25'
 streamlit run pii_leak_hunter/ui/app.py
 ```
 
+The web console now includes:
+
+- Local file and remote-provider scan flows
+- Optional baseline artifact upload from prior safe JSON or evidence packs
+- Severity and exploitability overview cards
+- Grouped findings drill-down with masked previews
+- Built-in least-privilege presets for major integrations
+- One-click export for HTML audit reports, JSON, CSV, Markdown, SARIF, and evidence packs
+
 ---
 
 ### 5. Scan local logs
@@ -203,6 +216,12 @@ Evidence pack export:
 ```bash
 pii-leak-hunter scan-file fixtures/demo_logs.ndjson --out-evidence evidence.zip
 ```
+
+The Streamlit web console can also generate:
+
+- A standalone HTML audit report for sharing with security, engineering, and leadership
+- Filtered exports based on the current findings view
+- Baseline-aware triage showing `new`, `unchanged`, and `resolved` findings
 
 Least-privilege presets:
 
@@ -251,6 +270,32 @@ docker run --rm -p 8501:8501 \
 - Secret + PII in same payload → **critical**
 - AWS access key + secret key in one record → **critical**
 - Kubernetes API endpoint + bearer token → **critical**
+
+---
+
+## 🖥️ Web Console
+
+The web console is designed for fast human triage rather than raw data dumping.
+
+- `Scan`: run local or remote scans and optionally compare them to a safe baseline artifact
+- `Overview`: review severity totals, exploitability ladder, top entity families, and source metadata
+- `Findings`: filter by severity, exploitability, and baseline status, then inspect grouped incidents with masked previews
+- `Reports`: export a self-contained HTML audit report plus the existing machine-readable formats
+
+All views remain obfuscated by default. Raw values only appear when `Unsafe: show raw values` is explicitly enabled.
+
+---
+
+## 🧾 HTML Audit Report
+
+The HTML audit report is meant to be the default shareable artifact.
+
+- Self-contained single file
+- Safe by default with masked previews and hashes
+- Severity totals and exploitability ordering
+- Grouped incident presentation for repeated leaks
+- Remediation steps, blast radius, and policy tags
+- Print-friendly layout for browser “Save as PDF”
 
 ---
 
