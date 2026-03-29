@@ -61,3 +61,12 @@ def test_scan_supports_other_providers(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     assert "Scanned 1 record(s) from datadog." in result.stdout
+
+
+def test_scan_supports_unified_target_path() -> None:
+    result = runner.invoke(
+        app,
+        ["scan", "fixtures/demo_logs.ndjson"],
+    )
+    assert result.exit_code == 0
+    assert "Scanned 4 record(s)" in result.stdout

@@ -25,6 +25,7 @@ class DetectionResult:
     field_name: str | None = None
     detection_source: str = "regex"
     is_masked: bool = False
+    tags: list[str] = field(default_factory=list)
 
     def to_safe_dict(self, include_values: bool = False) -> dict[str, Any]:
         payload = asdict(self)

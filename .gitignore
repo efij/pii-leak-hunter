@@ -4,6 +4,7 @@ __pycache__/
 .mypy_cache/
 .streamlit/
 *.pyc
+.DS_Store
 dist/
 build/
 *.egg-info/

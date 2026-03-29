@@ -3,6 +3,7 @@ from __future__ import annotations
 from pii_leak_hunter.core.models import DetectionResult, Finding, LogRecord
 from pii_leak_hunter.detection.patterns import (
     HIGH_RISK_ENTITY_TYPES,
+    INFRA_IDENTIFIER_ENTITY_TYPES,
     PII_ENTITY_TYPES,
     SECRET_ENTITY_TYPES,
 )
@@ -21,6 +22,8 @@ class Correlator:
         findings.extend(self._masking_failures(record, text, detections))
         findings.extend(self._identity_bundles(record, detections))
         findings.extend(self._secret_pii_overlap(record, detections))
+        findings.extend(self._credential_bundles(record, detections))
+        findings.extend(self._control_plane_bundles(record, detections))
         return findings
 
     def _finding_from_detection(self, record: LogRecord, detection: DetectionResult) -> Finding:
@@ -113,5 +116,64 @@ class Correlator:
                 context={"entity_types": [entity.entity_type for entity in entities]},
                 source=record.source,
                 safe_summary="Secret and PII detected together in one record.",
+            )
+        ]
+
+    def _credential_bundles(
+        self,
+        record: LogRecord,
+        detections: list[DetectionResult],
+    ) -> list[Finding]:
+        entity_types = {item.entity_type for item in detections}
+        bundle_members = [
+            item
+            for item in detections
+            if item.entity_type in {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}
+        ]
+        if {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} <= entity_types and bundle_members:
+            return [
+                Finding(
+                    id=f"{record.record_id}:credential-bundle",
+                    record_id=record.record_id,
+                    type="credential_bundle",
+                    severity="low",
+                    entities=bundle_members,
+                    context={"entity_types": sorted({entity.entity_type for entity in bundle_members})},
+                    source=record.source,
+                    safe_summary="Cloud credential bundle detected in a single record.",
+                )
+            ]
+        return []
+
+    def _control_plane_bundles(
+        self,
+        record: LogRecord,
+        detections: list[DetectionResult],
+    ) -> list[Finding]:
+        entity_types = {item.entity_type for item in detections}
+        if not {"KUBERNETES_BEARER_TOKEN", "KUBERNETES_API_SERVER"} <= entity_types:
+            return []
+        entities = [
+            item
+            for item in detections
+            if item.entity_type in {"KUBERNETES_BEARER_TOKEN", "KUBERNETES_API_SERVER"}
+        ]
+        return [
+            Finding(
+                id=f"{record.record_id}:control-plane-secret",
+                record_id=record.record_id,
+                type="control_plane_secret",
+                severity="low",
+                entities=entities,
+                context={
+                    "entity_types": sorted({entity.entity_type for entity in entities}),
+                    "infra_identifiers": [
+                        entity.entity_type
+                        for entity in entities
+                        if entity.entity_type in INFRA_IDENTIFIER_ENTITY_TYPES
+                    ],
+                },
+                source=record.source,
+                safe_summary="Kubernetes control plane endpoint and bearer token detected together.",
             )
         ]

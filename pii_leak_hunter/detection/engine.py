@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pii_leak_hunter.core.models import DetectionResult
 from pii_leak_hunter.detection.custom_recognizers import iter_pattern_definitions
-from pii_leak_hunter.detection.patterns import PATTERNS, looks_like_name
+from pii_leak_hunter.detection.patterns import ENTITY_TAGS, PATTERNS, looks_like_name
 from pii_leak_hunter.detection.presidio_adapter import PresidioAdapter
 from pii_leak_hunter.utils.hashing import HashingService
 from pii_leak_hunter.utils.masking import masked_preview
@@ -116,4 +116,5 @@ class DetectionEngine:
             raw_value=raw_value,
             field_name=field_name,
             detection_source=detection_source,
+            tags=list(ENTITY_TAGS.get(entity_type, [])),
         )

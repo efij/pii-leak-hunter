@@ -89,6 +89,38 @@ class NewRelicConfig:
         return cls(api_key=api_key, account_id=account_id, region=region, base_url=base_url)
 
 
+@dataclass(slots=True)
+class ServiceNowConfig:
+    username: str | None = None
+    password: str | None = None
+    bearer_token: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "ServiceNowConfig":
+        username = os.getenv("SERVICENOW_USERNAME", "").strip() or None
+        password = os.getenv("SERVICENOW_PASSWORD", "").strip() or None
+        bearer_token = os.getenv("SERVICENOW_BEARER_TOKEN", "").strip() or None
+        if bearer_token:
+            return cls(bearer_token=bearer_token)
+        if username and password:
+            return cls(username=username, password=password)
+        raise ConfigurationError(
+            "ServiceNow scans require SERVICENOW_BEARER_TOKEN or both SERVICENOW_USERNAME and SERVICENOW_PASSWORD."
+        )
+
+
+@dataclass(slots=True)
+class NotionConfig:
+    api_key: str
+    notion_version: str = "2026-03-11"
+
+    @classmethod
+    def from_env(cls) -> "NotionConfig":
+        api_key = _required_env("NOTION_API_KEY", "Notion scans")
+        notion_version = os.getenv("NOTION_VERSION", "2026-03-11").strip() or "2026-03-11"
+        return cls(api_key=api_key, notion_version=notion_version)
+
+
 def _build_base_url(region: str) -> str:
     if region.startswith("http://") or region.startswith("https://"):
         return region.rstrip("/")

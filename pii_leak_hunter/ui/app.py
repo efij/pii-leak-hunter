@@ -28,7 +28,10 @@ def run_app() -> None:
     unsafe_show_values = st.checkbox("Unsafe: show raw values", value=False)
 
     if source_mode == "Local file":
-        uploaded = st.file_uploader("Upload .log, .json, or .ndjson", type=["log", "json", "ndjson"])
+        uploaded = st.file_uploader(
+            "Upload .log, .json, .ndjson, .gz, .bz2, or .zip",
+            type=["log", "json", "ndjson", "gz", "bz2", "zip"],
+        )
         if uploaded and st.button("Scan file", type="primary"):
             result = _scan_uploaded_file(uploaded)
             _render_result(result, unsafe_show_values=unsafe_show_values)
@@ -89,6 +92,7 @@ def _render_result(result: ScanResult, unsafe_show_values: bool = False) -> None
         entity = finding.entities[0] if finding.entities else None
         rows.append(
             {
+                "priority": finding.context.get("exploitability_priority", ""),
                 "severity": finding.severity,
                 "type": finding.type,
                 "record_id": finding.record_id,

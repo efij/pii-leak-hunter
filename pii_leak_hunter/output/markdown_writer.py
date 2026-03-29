@@ -28,6 +28,16 @@ def write_markdown(result: ScanResult, path: str, include_values: bool = False) 
             lines.append(f"- Record: `{finding.record_id}`")
             lines.append(f"- Source: `{finding.source}`")
             lines.append(f"- Summary: {finding.safe_summary}")
+            if finding.context.get("exploitability_priority"):
+                lines.append(f"- Exploitability priority: `{finding.context['exploitability_priority']}`")
+            if finding.context.get("policy_tags"):
+                lines.append(f"- Tags: `{', '.join(finding.context['policy_tags'])}`")
+            if finding.context.get("blast_radius"):
+                lines.append(f"- Blast radius: `{finding.context['blast_radius']}`")
+            if finding.context.get("risk_reasons"):
+                lines.append(f"- Risk reasons: {'; '.join(finding.context['risk_reasons'])}")
+            if finding.context.get("remediation"):
+                lines.append(f"- Remediation: {'; '.join(finding.context['remediation'])}")
             for entity in finding.entities:
                 lines.append(
                     f"- Entity: `{entity.entity_type}` | Hash: `{entity.value_hash[:12]}` | Preview: `{entity.masked_preview}`"
