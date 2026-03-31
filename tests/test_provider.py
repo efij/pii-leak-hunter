@@ -55,6 +55,31 @@ def test_coralogix_region_builder_accepts_app_hosts() -> None:
     assert _build_base_url("your-team.app.coralogix.us") == "https://api.us1.coralogix.com"
 
 
+def test_coralogix_provider_parses_dataprime_user_data_rows() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode("utf-8")
+        assert '"syntax":"QUERY_SYNTAX_DATAPRIME"' in body or '"syntax": "QUERY_SYNTAX_DATAPRIME"' in body
+        assert 'source logs | limit 500' in body
+        return httpx.Response(
+            200,
+            text='{"result":{"results":[{"userData":"{\\"message\\": \\"contact email=user@example.invalid phone=+1 555 0100\\", \\"service\\": \\"payments\\"}","metadata":[{"key":"timestamp","value":"2026-03-18T00:00:00Z"}],"labels":[{"key":"subsystemName","value":"api"}]}]}}',
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = CoralogixProvider(
+        CoralogixConfig(api_key="token", region="us1", base_url="https://api.us1.coralogix.com"),
+        client=client,
+    )
+
+    records = provider.fetch(query="source logs", start="-24h", end="now")
+
+    assert len(records) == 1
+    assert records[0].message == "contact email=user@example.invalid phone=+1 555 0100"
+    assert records[0].timestamp == "2026-03-18T00:00:00Z"
+    assert records[0].attributes["service"] == "payments"
+    assert provider.last_fetch_details["records_parsed"] == 1
+
+
 def test_datadog_provider_uses_logs_list_api() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v2/logs/events/search"

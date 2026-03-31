@@ -120,6 +120,7 @@ def scan(
         resolved_query, resolved_from = resolve_provider_scan_options(provider_name, query, from_)
         client = build_provider(provider_name)
         records = client.fetch(query=resolved_query, start=resolved_from, end=to)
+        provider_details = getattr(client, "last_fetch_details", {})
         result = Pipeline().run(
             records,
             source=provider_name,
@@ -129,6 +130,7 @@ def scan(
                 "query": resolved_query,
                 "from": resolved_from,
                 "to": to,
+                "provider_details": provider_details,
             },
         )
         result = _apply_baseline_if_requested(result, baseline_in=baseline_in, new_only=new_only)
@@ -203,6 +205,11 @@ def _emit_outputs(
 
 def _print_summary(result: ScanResult) -> None:
     typer.echo(f"Scanned {result.records_scanned} record(s) from {result.source}.")
+    provider_details = result.metadata.get("provider_details")
+    if isinstance(provider_details, dict) and provider_details:
+        typer.echo("Provider details:")
+        for key, value in provider_details.items():
+            typer.echo(f"  {key}: {value}")
     counts = result.severity_counts()
     typer.echo(
         "Findings: "

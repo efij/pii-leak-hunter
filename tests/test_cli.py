@@ -41,6 +41,8 @@ def test_scan_requires_coralogix_configuration() -> None:
 
 def test_scan_supports_other_providers(monkeypatch) -> None:
     class FakeProvider:
+        last_fetch_details = {"records_parsed": 1, "raw_rows_received": 1}
+
         def fetch(self, query: str, start: str, end: str):
             assert query == "*"
             assert start == "-24h"
@@ -61,6 +63,7 @@ def test_scan_supports_other_providers(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     assert "Scanned 1 record(s) from datadog." in result.stdout
+    assert "Provider details:" in result.stdout
 
 
 def test_scan_supports_custom_provider_filters(monkeypatch) -> None:
@@ -85,6 +88,20 @@ def test_scan_supports_custom_provider_filters(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     assert "Scanned 1 record(s) from datadog." in result.stdout
+
+
+def test_scan_uses_source_logs_default_for_coralogix(monkeypatch) -> None:
+    class FakeProvider:
+        def fetch(self, query: str, start: str, end: str):
+            assert query == "source logs"
+            assert start == "-24h"
+            assert end == "now"
+            return []
+
+    monkeypatch.setattr("pii_leak_hunter.cli.main.build_provider", lambda name: FakeProvider())
+    result = runner.invoke(app, ["scan", "--provider", "coralogix"])
+    assert result.exit_code == 0
+    assert "Scanned 0 record(s) from coralogix." in result.stdout
 
 
 def test_scan_supports_unified_target_path() -> None:

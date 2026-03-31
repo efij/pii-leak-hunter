@@ -158,6 +158,7 @@ That default remote flow means:
 - no provider query is required
 - the scan window defaults to the past 24 hours
 - the engine hunts for secrets, PII, masking failures, and risky combinations across whatever logs are returned
+- Coralogix uses a `source logs` DataPrime query by default so “scan everything” does not rely on Lucene wildcard behavior
 
 Run scan with another provider without knowing its query language:
 
@@ -200,6 +201,7 @@ The web console now includes:
 - Optional baseline artifact upload from prior safe JSON or evidence packs
 - Session scan history and active scan summary
 - Visible scan progress instead of fire-and-forget button clicks
+- A `Scan Details` section with the effective provider query, syntax, time window, and parsed row counts for remote scans
 - Severity and exploitability overview cards
 - Grouped findings drill-down with masked previews
 - Built-in least-privilege presets for major integrations

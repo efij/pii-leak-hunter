@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.4] - 2026-03-31
+
+### Fixed
+- Coralogix scans now parse DataPrime rows that arrive under `result.results[].userData`, which fixes false `0 record(s)` runs when logs were actually returned.
+- Default Coralogix “scan everything” mode now uses a DataPrime `source logs` query instead of a Lucene wildcard.
+- The CLI and Streamlit UI now preserve provider fetch details such as the effective query, syntax, window, and parsed row counts so zero-result runs are easier to diagnose.
+
 ## [5.0.3] - 2026-03-31
 
 ### Changed

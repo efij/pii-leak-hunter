@@ -391,6 +391,8 @@ def _execute_scan(
             status.markdown(f"**{label}**: connecting and loading records")
             progress.progress(35)
             result = runner()
+        status.markdown(f"**{label}**: loaded `{result.records_scanned}` record(s), analyzing findings")
+        progress.progress(60)
         status.markdown(f"**{label}**: analyzing records")
         progress.progress(75)
         result = _apply_uploaded_baseline(result, baseline_upload)
@@ -399,7 +401,10 @@ def _execute_scan(
         _remember_scan(result)
         progress.progress(100)
         status.markdown(f"**{label}**: complete")
-        st.success(f"Scanned {result.records_scanned} record(s) from {result.source}.")
+        if result.records_scanned == 0:
+            st.warning(f"Scan completed but {result.source} returned 0 parsed record(s). Check Scan Details below for the exact query and provider response summary.")
+        else:
+            st.success(f"Scanned {result.records_scanned} record(s) from {result.source}.")
     except ConfigurationError as exc:
         st.error(str(exc))
     except Exception as exc:
@@ -409,6 +414,7 @@ def _execute_scan(
 def _run_remote_provider_scan(provider_name: str, query: str, start: str, end: str) -> ScanResult:
     provider = build_provider(provider_name)
     records = provider.fetch(query=query, start=start, end=end)
+    provider_details = getattr(provider, "last_fetch_details", {})
     return Pipeline().run(
         records,
         source=normalize_provider_name(provider_name),
@@ -418,6 +424,7 @@ def _run_remote_provider_scan(provider_name: str, query: str, start: str, end: s
             "query": query,
             "from": start,
             "to": end,
+            "provider_details": provider_details,
         },
     )
 
@@ -512,6 +519,7 @@ def _state_key(prefix: str, name: str) -> str:
 
 
 def _render_result(result: ScanResult, unsafe_show_values: bool = False) -> None:
+    _render_scan_details(result)
     st.subheader("Overview")
     meta_col, action_col = st.columns([1.25, 1])
     with meta_col:
@@ -715,6 +723,27 @@ def _render_severity_cards(result: ScanResult) -> None:
         "</div>",
     ]
     st.markdown("".join(markup), unsafe_allow_html=True)
+
+
+def _render_scan_details(result: ScanResult) -> None:
+    st.subheader("Scan Details")
+    metadata = result.metadata or {}
+    provider_details = metadata.get("provider_details", {})
+    summary_left, summary_right = st.columns(2)
+    with summary_left:
+        st.write(f"Source: `{result.source}`")
+        st.write(f"Records parsed: `{result.records_scanned}`")
+        st.write(f"Findings: `{len(result.findings)}`")
+    with summary_right:
+        if metadata.get("provider"):
+            st.write(f"Provider: `{metadata.get('provider')}`")
+        if metadata.get("from") or metadata.get("to"):
+            st.write(f"Window: `{metadata.get('from', '')}` -> `{metadata.get('to', '')}`")
+        if metadata.get("query"):
+            st.write(f"Requested filter: `{metadata.get('query')}`")
+    if provider_details:
+        st.markdown("#### Provider Response")
+        st.json(provider_details)
 
 
 def _render_diff_cards(diff) -> None:

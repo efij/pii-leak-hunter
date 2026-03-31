@@ -23,6 +23,7 @@ class CoralogixProvider(BaseProvider):
         client: httpx.Client | None = None,
         page_size: int = 500,
     ) -> None:
+        super().__init__()
         self.config = config
         self.client = client or httpx.Client(timeout=10.0)
         self.page_size = page_size
@@ -30,7 +31,18 @@ class CoralogixProvider(BaseProvider):
     def fetch(self, query: str, start: str, end: str) -> list[LogRecord]:
         payload = self._build_payload(query=query, start=start, end=end)
         items = self._request_with_retries(payload)
-        return [self._to_record(item) for item in items]
+        records = [self._to_record(item) for item in items]
+        self.last_fetch_details = {
+            "endpoint": self._build_url(),
+            "requested_query": query,
+            "effective_query": payload["query"],
+            "query_syntax": payload["metadata"]["syntax"],
+            "from": payload["metadata"]["startDate"],
+            "to": payload["metadata"]["endDate"],
+            "raw_rows_received": len(items),
+            "records_parsed": len(records),
+        }
+        return records
 
     def _request_with_retries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         last_error: Exception | None = None
@@ -93,6 +105,11 @@ class CoralogixProvider(BaseProvider):
         if not isinstance(payload, dict):
             return
 
+        normalized_row = self._normalize_data_row(payload)
+        if normalized_row is not None:
+            records.append(normalized_row)
+            return
+
         if any(key in payload for key in ("message", "text", "log", "_raw", "body", "content")):
             records.append(payload)
             return
@@ -103,6 +120,59 @@ class CoralogixProvider(BaseProvider):
         for key in ("result", "results", "records", "logs", "data", "userData", "record", "items", "hits"):
             if key in payload:
                 self._walk_payload(payload[key], records)
+
+    def _normalize_data_row(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        user_data = payload.get("userData")
+        if user_data is None:
+            return None
+
+        parsed_user_data = self._parse_user_data(user_data)
+        if isinstance(parsed_user_data, dict):
+            record = dict(parsed_user_data)
+        else:
+            record = {"message": str(parsed_user_data)}
+
+        for field in ("message", "text", "log", "_raw", "body", "content"):
+            if field in payload and field not in record:
+                record[field] = payload[field]
+
+        metadata = payload.get("metadata")
+        if isinstance(metadata, list):
+            record["coralogix_metadata"] = metadata
+            extracted_timestamp = _extract_field_from_pairs(metadata, {"timestamp", "@timestamp", "time", "_time"})
+            if extracted_timestamp and "timestamp" not in record and "@timestamp" not in record and "time" not in record:
+                record["timestamp"] = extracted_timestamp
+        elif isinstance(metadata, dict):
+            record["coralogix_metadata"] = metadata
+            extracted_timestamp = (
+                metadata.get("timestamp") or metadata.get("@timestamp") or metadata.get("time") or metadata.get("_time")
+            )
+            if extracted_timestamp and "timestamp" not in record and "@timestamp" not in record and "time" not in record:
+                record["timestamp"] = extracted_timestamp
+
+        labels = payload.get("labels")
+        if isinstance(labels, list):
+            record["coralogix_labels"] = labels
+        elif isinstance(labels, dict):
+            record["coralogix_labels"] = labels
+
+        for key, value in payload.items():
+            if key not in {"userData", "metadata", "labels"} and key not in record:
+                record[key] = value
+        return record
+
+    def _parse_user_data(self, user_data: Any) -> Any:
+        if isinstance(user_data, dict):
+            return user_data
+        if isinstance(user_data, str):
+            stripped = user_data.strip()
+            if not stripped:
+                return ""
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                return stripped
+        return user_data
 
     def _to_record(self, item: dict[str, Any]) -> LogRecord:
         timestamp = str(item.get("timestamp") or item.get("@timestamp") or item.get("time") or item.get("_time") or "")
@@ -194,3 +264,15 @@ def _to_coralogix_time(value: str) -> str:
 
 def _format_datetime(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _extract_field_from_pairs(pairs: list[Any], candidate_keys: set[str]) -> str | None:
+    for item in pairs:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or item.get("name") or "").strip().lower()
+        if key in candidate_keys:
+            value = item.get("value")
+            if value is not None:
+                return str(value)
+    return None

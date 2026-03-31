@@ -18,14 +18,14 @@ from pii_leak_hunter.utils.config import (
 SUPPORTED_PROVIDERS = ("coralogix", "datadog", "dynatrace", "splunk", "newrelic")
 DEFAULT_PROVIDER_LOOKBACK = "-24h"
 DEFAULT_PROVIDER_QUERIES = {
-    "coralogix": "*",
+    "coralogix": "source logs",
     "datadog": "*",
     "dynatrace": "*",
     "splunk": "*",
     "newrelic": "*",
 }
 PROVIDER_QUERY_HINTS = {
-    "coralogix": 'Optional: source:"mailer-service"',
+    "coralogix": 'Optional: source logs | filter log_obj.applicationName == "your-service"',
     "datadog": "Optional: service:mailer-service",
     "dynatrace": 'Optional: contains(content, "mailer-service")',
     "splunk": 'Optional: index=main service="mailer-service"',
