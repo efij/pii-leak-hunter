@@ -168,7 +168,13 @@ def _render_remote_provider_tab(baseline_upload) -> None:
                 label=f"{provider_name} remote scan",
                 baseline_upload=baseline_upload,
                 env_overrides=env_overrides,
-                runner=lambda: _run_remote_provider_scan(provider_name, resolved_query, resolved_start, end),
+                runner=lambda progress_callback: _run_remote_provider_scan(
+                    provider_name,
+                    resolved_query,
+                    resolved_start,
+                    end,
+                    progress_callback=progress_callback,
+                ),
             )
     with right:
         st.markdown("#### Connection Details")
@@ -197,7 +203,7 @@ def _render_target_tab(baseline_upload) -> None:
                     label=f"{target_mode} scan",
                     baseline_upload=baseline_upload,
                     env_overrides=env_overrides,
-                    runner=lambda: _run_target_scan(target),
+                    runner=lambda progress_callback: _run_target_scan(target),
                 )
     with right:
         st.markdown("#### Builder Notes")
@@ -220,7 +226,7 @@ def _render_local_upload_tab(baseline_upload) -> None:
             label=f"Uploaded file scan ({uploaded.name})",
             baseline_upload=baseline_upload,
             env_overrides={},
-            runner=lambda: _scan_uploaded_file(uploaded),
+            runner=lambda progress_callback: _scan_uploaded_file(uploaded),
         )
 
 
@@ -389,14 +395,17 @@ def _execute_scan(
 ) -> None:
     progress = st.progress(0)
     status = st.empty()
+    detail = st.empty()
     try:
         status.markdown(f"**{label}**: validating configuration")
+        detail.caption("Preparing scan context.")
         progress.progress(10)
         with _temporary_environment(env_overrides):
             status.markdown(f"**{label}**: connecting and loading records")
             progress.progress(35)
-            result = runner()
+            result = runner(_make_progress_callback(progress, status, detail, label))
         status.markdown(f"**{label}**: loaded `{result.records_scanned}` record(s), analyzing findings")
+        detail.caption("Running detection, correlation, and scoring.")
         progress.progress(60)
         status.markdown(f"**{label}**: analyzing records")
         progress.progress(75)
@@ -406,6 +415,9 @@ def _execute_scan(
         _remember_scan(result)
         progress.progress(100)
         status.markdown(f"**{label}**: complete")
+        detail.caption(
+            f"Finished in {_format_seconds(result.metadata.get('provider_details', {}).get('elapsed_seconds', 0.0)) if isinstance(result.metadata.get('provider_details'), dict) else '0s'}."
+        )
         if result.records_scanned == 0:
             st.warning(f"Scan completed but {result.source} returned 0 parsed record(s). Check Scan Details below for the exact query and provider response summary.")
         else:
@@ -416,8 +428,17 @@ def _execute_scan(
         st.error(f"Scan failed: {exc}")
 
 
-def _run_remote_provider_scan(provider_name: str, query: str, start: str, end: str) -> ScanResult:
+def _run_remote_provider_scan(
+    provider_name: str,
+    query: str,
+    start: str,
+    end: str,
+    *,
+    progress_callback=None,
+) -> ScanResult:
     provider = build_provider(provider_name)
+    if hasattr(provider, "set_progress_callback"):
+        provider.set_progress_callback(progress_callback)
     records = provider.fetch(query=query, start=start, end=end)
     provider_details = getattr(provider, "last_fetch_details", {})
     return Pipeline().run(
@@ -479,6 +500,48 @@ def _remember_scan(result: ScanResult) -> None:
         },
     )
     st.session_state["scan_history"] = history[:12]
+
+
+def _make_progress_callback(progress, status, detail, label: str):
+    def callback(event: dict[str, object]) -> None:
+        provider = str(event.get("provider", "provider"))
+        note = str(event.get("note", "Working"))
+        completed = int(event.get("completed", 0))
+        expected = max(int(event.get("expected", 1)), 1)
+        ratio = float(event.get("progress", 0.0))
+        progress_value = min(90, max(15, int(ratio * 100)))
+        elapsed = _format_seconds(float(event.get("elapsed_seconds", 0.0)))
+        eta_raw = event.get("eta_seconds")
+        eta = _format_seconds(float(eta_raw)) if isinstance(eta_raw, (int, float)) else "estimating"
+        window = f"{event.get('window_start', '')} -> {event.get('window_end', '')}"
+        tier = str(event.get("tier", ""))
+        stage = str(event.get("stage", "running"))
+        raw_rows = event.get("raw_rows")
+        parsed_rows = event.get("parsed_rows")
+        counts = []
+        if raw_rows is not None:
+            counts.append(f"raw={raw_rows}")
+        if parsed_rows is not None:
+            counts.append(f"parsed={parsed_rows}")
+        counts_text = f" | {' '.join(counts)}" if counts else ""
+        status.markdown(f"**{label}**: {provider} {stage}")
+        detail.caption(
+            f"{note} | tier={tier} | window={window} | step {completed}/{expected} | elapsed={elapsed} | eta={eta}{counts_text}"
+        )
+        progress.progress(progress_value)
+
+    return callback
+
+
+def _format_seconds(value: float) -> str:
+    total = max(0, int(round(value)))
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
 
 
 @contextmanager

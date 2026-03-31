@@ -31,12 +31,23 @@ class CoralogixProvider(BaseProvider):
         self.min_window = min_window
 
     def fetch(self, query: str, start: str, end: str) -> list[LogRecord]:
+        self._progress_started_at = time.monotonic()
+        self._progress_completed = 0
+        self._progress_expected = 1
         now = datetime.now(timezone.utc)
         start_dt, end_dt = _resolve_time_window(start, end, now=now)
         normalized_query = query.strip()
         query_syntax = "QUERY_SYNTAX_DATAPRIME" if self._looks_like_dataprime_query(normalized_query) else "QUERY_SYNTAX_LUCENE"
         has_explicit_limit = query_syntax == "QUERY_SYNTAX_DATAPRIME" and "| limit " in normalized_query.lower()
         attempts: list[dict[str, Any]] = []
+        self._emit_runtime_progress(
+            stage="starting",
+            tier="TIER_FREQUENT_SEARCH",
+            start_dt=start_dt,
+            end_dt=end_dt,
+            query=normalized_query,
+            note="Preparing Coralogix scan windows",
+        )
 
         primary_records = self._fetch_window_records(
             query=normalized_query,
@@ -50,6 +61,15 @@ class CoralogixProvider(BaseProvider):
 
         records = list(primary_records)
         if not records and _should_try_archive(start_dt, end_dt):
+            self._progress_expected += 1
+            self._emit_runtime_progress(
+                stage="switching_tier",
+                tier="TIER_ARCHIVE",
+                start_dt=start_dt,
+                end_dt=end_dt,
+                query=normalized_query,
+                note="No parsed records from frequent tier, retrying archive",
+            )
             archive_records = self._fetch_window_records(
                 query=normalized_query,
                 start_dt=start_dt,
@@ -62,6 +82,7 @@ class CoralogixProvider(BaseProvider):
             records = archive_records
 
         final_attempt = attempts[-1]
+        total_elapsed = time.monotonic() - self._progress_started_at
         self.last_fetch_details = {
             "endpoint": self._build_url(),
             "requested_query": normalized_query,
@@ -73,6 +94,7 @@ class CoralogixProvider(BaseProvider):
             "raw_rows_received": final_attempt["raw_rows_received"],
             "records_parsed": final_attempt["records_parsed"],
             "window_count": len({(attempt["from"], attempt["to"], attempt["tier"]) for attempt in attempts}),
+            "elapsed_seconds": round(total_elapsed, 2),
             "attempts": attempts,
         }
         return records
@@ -89,6 +111,14 @@ class CoralogixProvider(BaseProvider):
         attempts: list[dict[str, Any]],
         depth: int = 0,
     ) -> list[LogRecord]:
+        self._emit_runtime_progress(
+            stage="requesting",
+            tier=tier,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            query=query,
+            note=f"Querying {tier.lower()} window at depth {depth}",
+        )
         payload = self._build_payload(
             query=query,
             start_dt=start_dt,
@@ -100,6 +130,18 @@ class CoralogixProvider(BaseProvider):
         items = self._request_with_retries(payload)
         records = [self._to_record(item) for item in items]
         attempts.append(self._build_attempt_details(payload, items, records, depth=depth))
+        self._progress_completed += 1
+        self._emit_runtime_progress(
+            stage="received",
+            tier=tier,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            query=payload["query"],
+            note=f"Received {len(records)} parsed record(s) from {tier.lower()}",
+            raw_rows=len(items),
+            parsed_rows=len(records),
+            depth=depth,
+        )
 
         if (
             query_syntax == "QUERY_SYNTAX_DATAPRIME"
@@ -107,6 +149,18 @@ class CoralogixProvider(BaseProvider):
             and len(records) >= self.page_size
             and (end_dt - start_dt) > self.min_window
         ):
+            self._progress_expected += 2
+            self._emit_runtime_progress(
+                stage="splitting",
+                tier=tier,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                query=payload["query"],
+                note=f"Chunk hit cap ({self.page_size}); splitting window in half",
+                raw_rows=len(items),
+                parsed_rows=len(records),
+                depth=depth,
+            )
             midpoint = start_dt + (end_dt - start_dt) / 2
             left_end = midpoint
             right_start = midpoint + timedelta(milliseconds=1)
@@ -328,6 +382,45 @@ class CoralogixProvider(BaseProvider):
             if details:
                 return f"{error} | response={details}"
         return str(error)
+
+    def _emit_runtime_progress(
+        self,
+        *,
+        stage: str,
+        tier: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        query: str,
+        note: str,
+        raw_rows: int | None = None,
+        parsed_rows: int | None = None,
+        depth: int | None = None,
+    ) -> None:
+        elapsed_seconds = max(0.0, time.monotonic() - getattr(self, "_progress_started_at", time.monotonic()))
+        remaining = max(self._progress_expected - self._progress_completed, 0)
+        eta_seconds = (elapsed_seconds / self._progress_completed * remaining) if self._progress_completed else None
+        progress = self._progress_completed / max(self._progress_expected, 1)
+        payload: dict[str, Any] = {
+            "provider": "coralogix",
+            "stage": stage,
+            "tier": tier,
+            "query": query,
+            "window_start": _format_datetime(start_dt),
+            "window_end": _format_datetime(end_dt),
+            "completed": self._progress_completed,
+            "expected": self._progress_expected,
+            "progress": progress,
+            "elapsed_seconds": elapsed_seconds,
+            "eta_seconds": eta_seconds,
+            "note": note,
+        }
+        if raw_rows is not None:
+            payload["raw_rows"] = raw_rows
+        if parsed_rows is not None:
+            payload["parsed_rows"] = parsed_rows
+        if depth is not None:
+            payload["depth"] = depth
+        self._emit_progress(payload)
 
     def _build_attempt_details(
         self,

@@ -152,6 +152,30 @@ def test_coralogix_provider_splits_full_windows_when_limit_is_hit() -> None:
     assert len(provider.last_fetch_details["attempts"]) == 3
 
 
+def test_coralogix_provider_emits_progress_events() -> None:
+    events: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text='{"result":{"results":[{"userData":"{\\"message\\": \\"progress row\\"}","metadata":[{"key":"timestamp","value":"2026-03-18T00:00:00Z"}]}]}}',
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = CoralogixProvider(
+        CoralogixConfig(api_key="token", region="us1", base_url="https://api.us1.coralogix.com"),
+        client=client,
+    )
+    provider.set_progress_callback(lambda event: events.append(event))
+
+    records = provider.fetch(query="source logs", start="-1h", end="now")
+
+    assert len(records) == 1
+    assert any(event["stage"] == "starting" for event in events)
+    assert any(event["stage"] == "requesting" for event in events)
+    assert any(event["stage"] == "received" for event in events)
+
+
 def test_datadog_provider_uses_logs_list_api() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v2/logs/events/search"

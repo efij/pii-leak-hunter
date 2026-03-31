@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.8] - 2026-03-31
+
+### Changed
+- Coralogix scans in the Streamlit UI now emit live runtime progress with a moving progress bar, chunk/tier status, elapsed time, and ETA instead of a static “connecting and loading records” message.
+- Coralogix provider callbacks now report per-window activity so the UI can show what is happening while broad scans are still in flight.
+
 ## [5.0.7] - 2026-03-31
 
 ### Changed

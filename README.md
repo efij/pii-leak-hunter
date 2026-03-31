@@ -202,7 +202,7 @@ The web console now includes:
 - Default “scan all logs for leaks” mode for remote providers, with optional custom provider filters
 - Optional baseline artifact upload from prior safe JSON or evidence packs
 - Session scan history and active scan summary
-- Visible scan progress instead of fire-and-forget button clicks
+- Visible scan progress instead of fire-and-forget button clicks, including elapsed time, ETA, and a live one-line status for Coralogix window scans
 - A `Scan Details` section with the effective provider query, syntax, time window, and parsed row counts for remote scans
 - Severity and exploitability overview cards
 - Grouped findings drill-down with raw values shown in the GUI by default for easier validation
