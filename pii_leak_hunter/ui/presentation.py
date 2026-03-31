@@ -38,6 +38,7 @@ class PresentationGroup:
     priority: str
     finding_type: str
     preview: str
+    raw_preview: str
     entity_types: list[str]
     hashes: list[str]
     baseline_statuses: list[str]
@@ -83,7 +84,8 @@ def group_findings(findings: list[Finding]) -> list[PresentationGroup]:
                 severity=finding.severity,
                 priority=str(finding.context.get("exploitability_priority", "P4")),
                 finding_type=finding.type,
-                preview=_best_preview(finding.entities),
+                preview=_best_preview(finding.entities, include_values=False),
+                raw_preview=_best_preview(finding.entities, include_values=True),
                 entity_types=entity_types,
                 hashes=hashes,
                 baseline_statuses=statuses,
@@ -97,12 +99,16 @@ def group_findings(findings: list[Finding]) -> list[PresentationGroup]:
         group.entity_types = sorted(set(group.entity_types) | set(entity_types))
         group.hashes = sorted(set(group.hashes) | set(hashes))
         group.baseline_statuses = sorted(set(group.baseline_statuses) | set(statuses))
-        if len(group.preview) < len(_best_preview(finding.entities)):
-            group.preview = _best_preview(finding.entities)
+        masked_preview = _best_preview(finding.entities, include_values=False)
+        raw_preview = _best_preview(finding.entities, include_values=True)
+        if len(group.preview) < len(masked_preview):
+            group.preview = masked_preview
+        if len(group.raw_preview) < len(raw_preview):
+            group.raw_preview = raw_preview
     return sorted(grouped.values(), key=_group_sort_key)
 
 
-def build_findings_rows(groups: list[PresentationGroup]) -> list[dict[str, object]]:
+def build_findings_rows(groups: list[PresentationGroup], *, include_values: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for group in groups:
         rows.append(
@@ -113,7 +119,7 @@ def build_findings_rows(groups: list[PresentationGroup]) -> list[dict[str, objec
                 "occurrences": group.count,
                 "baseline": ", ".join(group.baseline_statuses),
                 "entities": ", ".join(group.entity_types),
-                "preview": group.preview,
+                "preview": group.raw_preview if include_values else group.preview,
                 "records": ", ".join(group.record_ids[:3]),
             }
         )
@@ -166,8 +172,10 @@ def _group_identity(finding: Finding) -> tuple[str, str]:
     return f"type:{finding.type}", finding.type.replace("_", " ").title()
 
 
-def _best_preview(entities: list[DetectionResult]) -> str:
+def _best_preview(entities: list[DetectionResult], *, include_values: bool) -> str:
     for entity in entities:
+        if include_values and entity.raw_value:
+            return entity.raw_value
         if entity.masked_preview:
             return entity.masked_preview
     return ""

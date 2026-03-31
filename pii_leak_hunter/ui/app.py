@@ -52,7 +52,7 @@ def run_app() -> None:
     _initialize_state()
     _render_hero()
 
-    unsafe_show_values = _render_sidebar()
+    show_raw_values, export_raw_values = _render_sidebar()
 
     top_left, top_right = st.columns([1.6, 1])
     with top_left:
@@ -83,7 +83,7 @@ def run_app() -> None:
 
     result = st.session_state.get("scan_result")
     if isinstance(result, ScanResult):
-        _render_result(result, unsafe_show_values=unsafe_show_values)
+        _render_result(result, show_raw_values=show_raw_values, export_raw_values=export_raw_values)
     else:
         st.info("Run a scan to unlock the overview, grouped findings, audit report, and evidence exports.")
 
@@ -93,13 +93,18 @@ def _initialize_state() -> None:
     st.session_state.setdefault("scan_history", [])
 
 
-def _render_sidebar() -> bool:
+def _render_sidebar() -> tuple[bool, bool]:
     sidebar = st.sidebar
     sidebar.subheader("Session")
-    unsafe_show_values = sidebar.checkbox(
-        "Unsafe: show raw values",
+    show_raw_values = sidebar.checkbox(
+        "Show raw values in GUI",
+        value=True,
+        help="Enabled by default so you can validate findings directly in the app.",
+    )
+    export_raw_values = sidebar.checkbox(
+        "Unsafe: include raw values in exports",
         value=False,
-        help="Disabled by default so the UI and reports stay safe to share.",
+        help="Leave this off unless you intentionally want downloads to contain raw values.",
     )
     result = st.session_state.get("scan_result")
     if isinstance(result, ScanResult):
@@ -112,7 +117,7 @@ def _render_sidebar() -> bool:
         sidebar.markdown("#### Recent Runs")
         sidebar.dataframe(history[:8], use_container_width=True, hide_index=True)
     sidebar.caption("Credentials entered here stay in the current Streamlit session only.")
-    return unsafe_show_values
+    return show_raw_values, export_raw_values
 
 
 def _render_remote_provider_tab(baseline_upload) -> None:
@@ -518,7 +523,7 @@ def _state_key(prefix: str, name: str) -> str:
     return f"{prefix}-{name}"
 
 
-def _render_result(result: ScanResult, unsafe_show_values: bool = False) -> None:
+def _render_result(result: ScanResult, show_raw_values: bool = True, export_raw_values: bool = False) -> None:
     _render_scan_details(result)
     st.subheader("Overview")
     meta_col, action_col = st.columns([1.25, 1])
@@ -600,12 +605,12 @@ def _render_result(result: ScanResult, unsafe_show_values: bool = False) -> None
     if not filtered_findings:
         st.warning("No findings match the current filters.")
         report_result = _filtered_result(result, filtered_findings)
-        _render_reports(report_result, unsafe_show_values=unsafe_show_values)
+        _render_reports(report_result, unsafe_show_values=export_raw_values)
         return
 
     if grouped_view:
         groups = group_findings(filtered_findings)
-        rows = build_findings_rows(groups)
+        rows = build_findings_rows(groups, include_values=show_raw_values)
         findings_left, findings_right = st.columns([1.25, 1])
         with findings_left:
             st.dataframe(rows, use_container_width=True)
@@ -615,10 +620,10 @@ def _render_result(result: ScanResult, unsafe_show_values: bool = False) -> None
                 options=[group.key for group in groups],
                 format_func=lambda key: next(group.title for group in groups if group.key == key),
             )
-            _render_group_detail(next(group for group in groups if group.key == selected_group), unsafe_show_values)
+            _render_group_detail(next(group for group in groups if group.key == selected_group), show_raw_values)
         report_result = _filtered_result(result, filtered_findings)
     else:
-        rows = _finding_rows(filtered_findings)
+        rows = _finding_rows(filtered_findings, include_values=show_raw_values)
         findings_left, findings_right = st.columns([1.25, 1])
         with findings_left:
             st.dataframe(rows, use_container_width=True)
@@ -634,11 +639,11 @@ def _render_result(result: ScanResult, unsafe_show_values: bool = False) -> None
             )
             _render_finding_detail(
                 next(finding for finding in filtered_findings if finding.id == selected_finding),
-                unsafe_show_values,
+                show_raw_values,
             )
         report_result = _filtered_result(result, filtered_findings)
 
-    _render_reports(report_result, unsafe_show_values=unsafe_show_values)
+    _render_reports(report_result, unsafe_show_values=export_raw_values)
 
 
 def _render_reports(result: ScanResult, unsafe_show_values: bool) -> None:
@@ -697,19 +702,33 @@ def _render_reports(result: ScanResult, unsafe_show_values: bool) -> None:
         )
 
 
-def _render_group_detail(group, unsafe_show_values: bool) -> None:
+def _render_group_detail(group, show_raw_values: bool) -> None:
     st.markdown(f"#### {group.title}")
     st.write(f"Occurrences: `{group.count}` | Priority: `{group.priority}` | Severity: `{group.severity}`")
     st.write(f"Entities: `{', '.join(group.entity_types)}`")
-    st.write(group.preview or "Masked preview unavailable.")
+    preview = group.raw_preview if show_raw_values and group.raw_preview else group.preview
+    st.write(preview or "Preview unavailable.")
     for finding in group.findings:
         with st.expander(f"{finding.severity.upper()} - {finding.type} - {finding.record_id}"):
-            _render_finding_detail(finding, unsafe_show_values)
+            _render_finding_detail(finding, show_raw_values)
 
 
-def _render_finding_detail(finding: Finding, unsafe_show_values: bool) -> None:
+def _render_finding_detail(finding: Finding, show_raw_values: bool) -> None:
     st.write(finding.safe_summary)
-    st.json(finding.to_safe_dict(include_values=unsafe_show_values))
+    if show_raw_values:
+        raw_values = [
+            {
+                "entity_type": entity.entity_type,
+                "field_name": entity.field_name,
+                "raw_value": entity.raw_value,
+            }
+            for entity in finding.entities
+            if entity.raw_value
+        ]
+        if raw_values:
+            st.markdown("#### Raw Matches")
+            st.json(raw_values)
+    st.json(finding.to_safe_dict(include_values=show_raw_values))
 
 
 def _render_severity_cards(result: ScanResult) -> None:
@@ -789,7 +808,7 @@ def _filtered_result(result: ScanResult, findings: list[Finding]) -> ScanResult:
     )
 
 
-def _finding_rows(findings: list[Finding]) -> list[dict[str, object]]:
+def _finding_rows(findings: list[Finding], *, include_values: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for finding in findings:
         entity = finding.entities[0] if finding.entities else None
@@ -801,7 +820,11 @@ def _finding_rows(findings: list[Finding]) -> list[dict[str, object]]:
                 "record_id": finding.record_id,
                 "entity": entity.entity_type if entity else "",
                 "baseline": finding.context.get("baseline_status", "current"),
-                "preview": entity.masked_preview if entity else "",
+                "preview": (
+                    entity.raw_value
+                    if include_values and entity and entity.raw_value
+                    else entity.masked_preview if entity else ""
+                ),
             }
         )
     return rows

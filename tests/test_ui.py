@@ -55,6 +55,9 @@ def test_ui_render_smoke(monkeypatch) -> None:
         def selectbox(self, label, options, format_func=None, **kwargs):
             return options[0]
 
+        def text_input(self, *args, **kwargs):
+            return kwargs.get("value", "")
+
         def markdown(self, *args, **kwargs):
             calls.append("markdown")
 
@@ -162,3 +165,31 @@ def test_temporary_environment_restores_previous_values() -> None:
 
     assert os.environ["DATADOG_SITE"] == "old.example"
     assert "DATADOG_API_KEY" not in os.environ
+
+
+def test_finding_rows_can_show_raw_values() -> None:
+    app_module = importlib.import_module("pii_leak_hunter.ui.app")
+    finding = Finding(
+        id="f1",
+        record_id="r1",
+        type="entity_detection",
+        severity="medium",
+        entities=[
+            DetectionResult(
+                entity_type="EMAIL_ADDRESS",
+                start=0,
+                end=18,
+                score=0.8,
+                value_hash="abc123",
+                masked_preview="user=***",
+                raw_value="user@example.invalid",
+            )
+        ],
+        context={"exploitability_priority": "P2"},
+        source="fixture",
+        safe_summary="Email detected.",
+    )
+
+    rows = app_module._finding_rows([finding], include_values=True)
+
+    assert rows[0]["preview"] == "user@example.invalid"

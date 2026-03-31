@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.7] - 2026-03-31
+
+### Changed
+- The Streamlit GUI now shows raw matched values by default so findings can be validated in-app without relying on masked-only previews.
+- GUI exports remain separately guarded behind an explicit unsafe export toggle, so on-screen validation no longer forces raw values into downloaded artifacts.
+
 ## [5.0.6] - 2026-03-31
 
 ### Fixed

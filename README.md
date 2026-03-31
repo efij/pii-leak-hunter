@@ -205,7 +205,7 @@ The web console now includes:
 - Visible scan progress instead of fire-and-forget button clicks
 - A `Scan Details` section with the effective provider query, syntax, time window, and parsed row counts for remote scans
 - Severity and exploitability overview cards
-- Grouped findings drill-down with masked previews
+- Grouped findings drill-down with raw values shown in the GUI by default for easier validation
 - Built-in least-privilege presets for major integrations
 - One-click export for HTML audit reports, JSON, CSV, Markdown, SARIF, and evidence packs
 
@@ -302,10 +302,10 @@ The web console is designed for fast human triage rather than raw data dumping.
 - `Target / URI`: scan host paths or build Postgres, S3, ServiceNow, and Notion targets without assembling the URI by hand
 - `Upload File`: upload local artifacts for direct scanning
 - `Overview`: review severity totals, exploitability ladder, top entity families, and source metadata
-- `Findings`: filter by severity, exploitability, and baseline status, then inspect grouped incidents with masked previews
-- `Reports`: export a self-contained HTML audit report plus the existing machine-readable formats
+- `Findings`: filter by severity, exploitability, and baseline status, then inspect grouped incidents with raw matches shown by default in the GUI
+- `Reports`: export a self-contained HTML audit report plus the existing machine-readable formats, with a separate toggle if you intentionally want raw values in downloads
 
-All views remain obfuscated by default. Raw values only appear when `Unsafe: show raw values` is explicitly enabled.
+The GUI now shows raw values by default so you can validate findings quickly. Downloads remain guarded unless `Unsafe: include raw values in exports` is explicitly enabled.
 
 ---
 
