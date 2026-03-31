@@ -204,6 +204,7 @@ The web console now includes:
 - Session scan history and active scan summary
 - Visible scan progress instead of fire-and-forget button clicks, including elapsed time, ETA, and a live one-line status for Coralogix window scans
 - A `Scan Details` section with the effective provider query, syntax, time window, and parsed row counts for remote scans
+- Bounded Coralogix scan batches with partial results and resume support for long-running windows
 - Severity and exploitability overview cards
 - Grouped findings drill-down with raw values shown in the GUI by default for easier validation
 - Built-in least-privilege presets for major integrations
@@ -304,6 +305,7 @@ The web console is designed for fast human triage rather than raw data dumping.
 - `Overview`: review severity totals, exploitability ladder, top entity families, and source metadata
 - `Findings`: filter by severity, exploitability, and baseline status, then inspect grouped incidents with raw matches shown by default in the GUI
 - `Reports`: export a self-contained HTML audit report plus the existing machine-readable formats, with a separate toggle if you intentionally want raw values in downloads
+- `Coralogix resume`: continue a partial wide-window scan instead of restarting from zero
 
 The GUI now shows raw values by default so you can validate findings quickly. Downloads remain guarded unless `Unsafe: include raw values in exports` is explicitly enabled.
 

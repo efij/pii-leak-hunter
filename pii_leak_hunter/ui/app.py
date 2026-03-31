@@ -91,6 +91,7 @@ def run_app() -> None:
 def _initialize_state() -> None:
     st.session_state.setdefault("scan_result", None)
     st.session_state.setdefault("scan_history", [])
+    st.session_state.setdefault("coralogix_resume", None)
 
 
 def _render_sidebar() -> tuple[bool, bool]:
@@ -176,6 +177,31 @@ def _render_remote_provider_tab(baseline_upload) -> None:
                     progress_callback=progress_callback,
                 ),
             )
+        if provider_name == "coralogix":
+            resume_bundle = st.session_state.get("coralogix_resume")
+            if isinstance(resume_bundle, dict):
+                st.warning("A partial Coralogix scan is available. You can resume it or discard it.")
+                controls = st.columns(2)
+                with controls[0]:
+                    if st.button("Resume Partial Coralogix Scan", key="resume-coralogix-scan"):
+                        env_overrides = _provider_env_overrides(provider_name)
+                        _execute_scan(
+                            label="coralogix remote scan",
+                            baseline_upload=baseline_upload,
+                            env_overrides=env_overrides,
+                            runner=lambda progress_callback: _run_remote_provider_scan(
+                                provider_name,
+                                str(resume_bundle["query"]),
+                                str(resume_bundle["from"]),
+                                str(resume_bundle["to"]),
+                                progress_callback=progress_callback,
+                                resume=True,
+                            ),
+                        )
+                with controls[1]:
+                    if st.button("Discard Partial Scan", key="discard-coralogix-scan"):
+                        st.session_state["coralogix_resume"] = None
+                        st.info("Discarded the stored partial Coralogix scan.")
     with right:
         st.markdown("#### Connection Details")
         st.caption("These values are used for the current session scan and do not need to be exported as shell env vars first.")
@@ -435,12 +461,33 @@ def _run_remote_provider_scan(
     end: str,
     *,
     progress_callback=None,
+    resume: bool = False,
 ) -> ScanResult:
     provider = build_provider(provider_name)
+    previous_records = []
+    if normalize_provider_name(provider_name) == "coralogix" and resume:
+        bundle = st.session_state.get("coralogix_resume")
+        if isinstance(bundle, dict):
+            previous_records = list(bundle.get("records", []))
+            if hasattr(provider, "resume_state"):
+                provider.resume_state = bundle.get("resume_state")
     if hasattr(provider, "set_progress_callback"):
         provider.set_progress_callback(progress_callback)
     records = provider.fetch(query=query, start=start, end=end)
+    if previous_records:
+        records = _dedupe_log_records(previous_records + records)
     provider_details = getattr(provider, "last_fetch_details", {})
+    if normalize_provider_name(provider_name) == "coralogix":
+        if isinstance(provider_details, dict) and provider_details.get("resume_available"):
+            st.session_state["coralogix_resume"] = {
+                "query": query,
+                "from": start,
+                "to": end,
+                "resume_state": provider_details.get("resume_state"),
+                "records": records,
+            }
+        else:
+            st.session_state["coralogix_resume"] = None
     return Pipeline().run(
         records,
         source=normalize_provider_name(provider_name),
@@ -465,7 +512,10 @@ def _scan_uploaded_file(uploaded) -> ScanResult:
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
         handle.write(uploaded.getvalue())
         temp_path = handle.name
-    records = load_file(temp_path)
+    try:
+        records = load_file(temp_path)
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
     return Pipeline().run(records, source=uploaded.name, metadata={"mode": "file"})
 
 
@@ -506,8 +556,9 @@ def _make_progress_callback(progress, status, detail, label: str):
     def callback(event: dict[str, object]) -> None:
         provider = str(event.get("provider", "provider"))
         note = str(event.get("note", "Working"))
-        completed = int(event.get("completed", 0))
-        expected = max(int(event.get("expected", 1)), 1)
+        processed = int(event.get("processed_windows", 0))
+        queued = int(event.get("queued_windows", 0))
+        discovered = int(event.get("discovered_windows", processed + queued))
         ratio = float(event.get("progress", 0.0))
         progress_value = min(90, max(15, int(ratio * 100)))
         elapsed = _format_seconds(float(event.get("elapsed_seconds", 0.0)))
@@ -526,7 +577,7 @@ def _make_progress_callback(progress, status, detail, label: str):
         counts_text = f" | {' '.join(counts)}" if counts else ""
         status.markdown(f"**{label}**: {provider} {stage}")
         detail.caption(
-            f"{note} | tier={tier} | window={window} | step {completed}/{expected} | elapsed={elapsed} | eta={eta}{counts_text}"
+            f"{note} | tier={tier} | window={window} | processed={processed} queued={queued} discovered={discovered} | elapsed={elapsed} | eta~={eta}{counts_text}"
         )
         progress.progress(progress_value)
 
@@ -593,10 +644,9 @@ def _render_result(result: ScanResult, show_raw_values: bool = True, export_raw_
     with meta_col:
         st.caption(f"Source: `{result.source}` | Records scanned: `{result.records_scanned}` | Findings: `{len(result.findings)}`")
     with action_col:
-        baseline_path = _write_temp_baseline(result)
         st.download_button(
             "Download Baseline Artifact",
-            data=baseline_path.read_text(encoding="utf-8"),
+            data=_build_baseline_data(result),
             file_name="baseline.json",
             mime="application/json",
         )
@@ -713,53 +763,46 @@ def _render_reports(result: ScanResult, unsafe_show_values: bool) -> None:
     st.subheader("Reports")
     st.caption("Downloads reflect the current findings filters and keep values obfuscated unless unsafe mode is enabled.")
     export_left, export_right, export_bottom = st.columns(3)
-    html_path = _write_temp_export("html", result, unsafe_show_values)
-    json_path = _write_temp_export("json", result, unsafe_show_values)
-    md_path = _write_temp_export("md", result, unsafe_show_values)
-    csv_path = _write_temp_export("csv", result, unsafe_show_values)
-    sarif_path = _write_temp_export("sarif", result, unsafe_show_values)
-    evidence_path = _write_temp_export("evidence", result, unsafe_show_values)
-    baseline_path = _write_temp_baseline(result)
     with export_left:
         st.download_button(
             "Download HTML Audit Report",
-            data=html_path.read_text(encoding="utf-8"),
+            data=_build_export_data("html", result, unsafe_show_values),
             file_name="audit-report.html",
             mime="text/html",
         )
         st.download_button(
             "Download Markdown",
-            data=md_path.read_text(encoding="utf-8"),
+            data=_build_export_data("md", result, unsafe_show_values),
             file_name="findings.md",
         )
         st.download_button(
             "Download Baseline JSON",
-            data=baseline_path.read_text(encoding="utf-8"),
+            data=_build_baseline_data(result),
             file_name="baseline.json",
             mime="application/json",
         )
     with export_right:
         st.download_button(
             "Download JSON",
-            data=json_path.read_text(encoding="utf-8"),
+            data=_build_export_data("json", result, unsafe_show_values),
             file_name="findings.json",
             mime="application/json",
         )
         st.download_button(
             "Download CSV",
-            data=csv_path.read_text(encoding="utf-8"),
+            data=_build_export_data("csv", result, unsafe_show_values),
             file_name="findings.csv",
         )
     with export_bottom:
         st.download_button(
             "Download SARIF",
-            data=sarif_path.read_text(encoding="utf-8"),
+            data=_build_export_data("sarif", result, unsafe_show_values),
             file_name="findings.sarif",
             mime="application/json",
         )
         st.download_button(
             "Download Evidence Pack",
-            data=evidence_path.read_bytes(),
+            data=_build_export_data("evidence", result, unsafe_show_values),
             file_name="evidence.zip",
             mime="application/zip",
         )
@@ -811,6 +854,8 @@ def _render_scan_details(result: ScanResult) -> None:
     st.subheader("Scan Details")
     metadata = result.metadata or {}
     provider_details = metadata.get("provider_details", {})
+    if isinstance(provider_details, dict) and provider_details.get("partial"):
+        st.warning("This is a partial Coralogix scan batch. Findings shown so far are real, and you can resume the remaining windows from the Remote Provider tab.")
     summary_left, summary_right = st.columns(2)
     with summary_left:
         st.write(f"Source: `{result.source}`")
@@ -871,6 +916,18 @@ def _filtered_result(result: ScanResult, findings: list[Finding]) -> ScanResult:
     )
 
 
+def _dedupe_log_records(records):
+    seen: set[tuple[str, str]] = set()
+    deduped = []
+    for record in records:
+        key = (record.timestamp, record.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(record)
+    return deduped
+
+
 def _finding_rows(findings: list[Finding], *, include_values: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for finding in findings:
@@ -909,32 +966,42 @@ def _matches_text_filter(finding: Finding, query: str) -> bool:
     return needle in haystack
 
 
-def _write_temp_export(kind: str, result: ScanResult, include_values: bool) -> Path:
+def _build_export_data(kind: str, result: ScanResult, include_values: bool) -> str | bytes:
     suffix = ".zip" if kind == "evidence" else f".{kind}"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
         temp_path = Path(handle.name)
-    if kind == "html":
-        write_html_report(result, str(temp_path), include_values=include_values)
-    elif kind == "md":
-        write_markdown(result, str(temp_path), include_values=include_values)
-    elif kind == "json":
-        write_json(result, str(temp_path), include_values=include_values)
-    elif kind == "csv":
-        write_csv(result, str(temp_path), include_values=include_values)
-    elif kind == "sarif":
-        write_sarif(result, str(temp_path), include_values=include_values)
-    elif kind == "evidence":
-        write_evidence_pack(result, str(temp_path), include_values=include_values)
-    else:
+    try:
+        if kind == "html":
+            write_html_report(result, str(temp_path), include_values=include_values)
+            return temp_path.read_text(encoding="utf-8")
+        if kind == "md":
+            write_markdown(result, str(temp_path), include_values=include_values)
+            return temp_path.read_text(encoding="utf-8")
+        if kind == "json":
+            write_json(result, str(temp_path), include_values=include_values)
+            return temp_path.read_text(encoding="utf-8")
+        if kind == "csv":
+            write_csv(result, str(temp_path), include_values=include_values)
+            return temp_path.read_text(encoding="utf-8")
+        if kind == "sarif":
+            write_sarif(result, str(temp_path), include_values=include_values)
+            return temp_path.read_text(encoding="utf-8")
+        if kind == "evidence":
+            write_evidence_pack(result, str(temp_path), include_values=include_values)
+            return temp_path.read_bytes()
         raise ValueError(f"Unsupported export kind: {kind}")
-    return temp_path
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
-def _write_temp_baseline(result: ScanResult) -> Path:
+def _build_baseline_data(result: ScanResult) -> str:
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
         temp_path = Path(handle.name)
-    write_baseline(result, str(temp_path))
-    return temp_path
+    try:
+        write_baseline(result, str(temp_path))
+        return temp_path.read_text(encoding="utf-8")
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _render_hero() -> None:

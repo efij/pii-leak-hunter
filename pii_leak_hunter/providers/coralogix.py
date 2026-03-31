@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -23,66 +24,181 @@ class CoralogixProvider(BaseProvider):
         client: httpx.Client | None = None,
         page_size: int = 5000,
         min_window: timedelta = timedelta(minutes=15),
+        max_windows_per_run: int = 32,
+        max_depth: int = 12,
     ) -> None:
         super().__init__()
         self.config = config
         self.client = client or httpx.Client(timeout=10.0)
         self.page_size = page_size
         self.min_window = min_window
+        self.max_windows_per_run = max_windows_per_run
+        self.max_depth = max_depth
+        self.resume_state: dict[str, Any] | None = None
 
     def fetch(self, query: str, start: str, end: str) -> list[LogRecord]:
         self._progress_started_at = time.monotonic()
-        self._progress_completed = 0
-        self._progress_expected = 1
         now = datetime.now(timezone.utc)
-        start_dt, end_dt = _resolve_time_window(start, end, now=now)
-        normalized_query = query.strip()
-        query_syntax = "QUERY_SYNTAX_DATAPRIME" if self._looks_like_dataprime_query(normalized_query) else "QUERY_SYNTAX_LUCENE"
-        has_explicit_limit = query_syntax == "QUERY_SYNTAX_DATAPRIME" and "| limit " in normalized_query.lower()
         attempts: list[dict[str, Any]] = []
-        self._emit_runtime_progress(
-            stage="starting",
-            tier="TIER_FREQUENT_SEARCH",
-            start_dt=start_dt,
-            end_dt=end_dt,
-            query=normalized_query,
-            note="Preparing Coralogix scan windows",
-        )
 
-        primary_records = self._fetch_window_records(
-            query=normalized_query,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            tier="TIER_FREQUENT_SEARCH",
-            query_syntax=query_syntax,
-            has_explicit_limit=has_explicit_limit,
-            attempts=attempts,
-        )
-
-        records = list(primary_records)
-        if not records and _should_try_archive(start_dt, end_dt):
-            self._progress_expected += 1
+        if self.resume_state:
+            state = self.resume_state
+            normalized_query = str(state["query"])
+            query_syntax = str(state["query_syntax"])
+            has_explicit_limit = bool(state["has_explicit_limit"])
+            queue = deque(_deserialize_windows(state["pending_windows"]))
+            discovered_windows = int(state.get("discovered_windows", len(queue)))
+            archive_attempted = bool(state.get("archive_attempted", False))
+            overall_start = _parse_time_value(str(state["overall_start"]), now=now)
+            overall_end = _parse_time_value(str(state["overall_end"]), now=now)
             self._emit_runtime_progress(
-                stage="switching_tier",
-                tier="TIER_ARCHIVE",
-                start_dt=start_dt,
-                end_dt=end_dt,
+                stage="resuming",
+                tier=queue[0]["tier"] if queue else "TIER_FREQUENT_SEARCH",
+                start_dt=overall_start,
+                end_dt=overall_end,
                 query=normalized_query,
-                note="No parsed records from frequent tier, retrying archive",
+                note="Resuming partial Coralogix scan",
+                processed_windows=0,
+                queued_windows=len(queue),
+                discovered_windows=discovered_windows,
             )
-            archive_records = self._fetch_window_records(
+        else:
+            overall_start, overall_end = _resolve_time_window(start, end, now=now)
+            normalized_query = query.strip()
+            query_syntax = "QUERY_SYNTAX_DATAPRIME" if self._looks_like_dataprime_query(normalized_query) else "QUERY_SYNTAX_LUCENE"
+            has_explicit_limit = query_syntax == "QUERY_SYNTAX_DATAPRIME" and "| limit " in normalized_query.lower()
+            queue = deque([{"start_dt": overall_start, "end_dt": overall_end, "tier": "TIER_FREQUENT_SEARCH", "depth": 0}])
+            discovered_windows = 1
+            archive_attempted = False
+            self._emit_runtime_progress(
+                stage="starting",
+                tier="TIER_FREQUENT_SEARCH",
+                start_dt=overall_start,
+                end_dt=overall_end,
+                query=normalized_query,
+                note="Preparing Coralogix scan windows",
+                processed_windows=0,
+                queued_windows=len(queue),
+                discovered_windows=discovered_windows,
+            )
+
+        records: list[LogRecord] = []
+        processed_windows = 0
+        while queue and processed_windows < self.max_windows_per_run:
+            window = queue.popleft()
+            start_dt = window["start_dt"]
+            end_dt = window["end_dt"]
+            tier = str(window["tier"])
+            depth = int(window["depth"])
+            self._emit_runtime_progress(
+                stage="requesting",
+                tier=tier,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                query=normalized_query,
+                note=f"Querying {tier.lower()} window at depth {depth}",
+                processed_windows=processed_windows,
+                queued_windows=len(queue) + 1,
+                discovered_windows=discovered_windows,
+            )
+            payload = self._build_payload(
                 query=normalized_query,
                 start_dt=start_dt,
                 end_dt=end_dt,
-                tier="TIER_ARCHIVE",
+                tier=tier,
                 query_syntax=query_syntax,
                 has_explicit_limit=has_explicit_limit,
-                attempts=attempts,
             )
-            records = archive_records
+            items = self._request_with_retries(payload)
+            window_records = [self._to_record(item) for item in items]
+            processed_windows += 1
+            attempts.append(self._build_attempt_details(payload, items, window_records, depth=depth))
+            self._emit_runtime_progress(
+                stage="received",
+                tier=tier,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                query=payload["query"],
+                note=f"Received {len(window_records)} parsed record(s) from {tier.lower()}",
+                raw_rows=len(items),
+                parsed_rows=len(window_records),
+                depth=depth,
+                processed_windows=processed_windows,
+                queued_windows=len(queue),
+                discovered_windows=discovered_windows,
+            )
+            should_split = self._should_split_window(
+                query_syntax=query_syntax,
+                has_explicit_limit=has_explicit_limit,
+                record_count=len(window_records),
+                start_dt=start_dt,
+                end_dt=end_dt,
+                depth=depth,
+            )
+            if should_split:
+                left_window, right_window = _split_window(start_dt, end_dt, tier=tier, depth=depth + 1)
+                queue.appendleft(right_window)
+                queue.appendleft(left_window)
+                discovered_windows += 2
+                self._emit_runtime_progress(
+                    stage="splitting",
+                    tier=tier,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    query=payload["query"],
+                    note=f"Chunk hit cap ({self.page_size}); splitting window in half",
+                    raw_rows=len(items),
+                    parsed_rows=len(window_records),
+                    depth=depth,
+                    processed_windows=processed_windows,
+                    queued_windows=len(queue),
+                    discovered_windows=discovered_windows,
+                )
+            else:
+                records.extend(window_records)
 
-        final_attempt = attempts[-1]
+            if not queue and not records and not archive_attempted and _should_try_archive(overall_start, overall_end):
+                queue.append({"start_dt": overall_start, "end_dt": overall_end, "tier": "TIER_ARCHIVE", "depth": 0})
+                discovered_windows += 1
+                archive_attempted = True
+                self._emit_runtime_progress(
+                    stage="switching_tier",
+                    tier="TIER_ARCHIVE",
+                    start_dt=overall_start,
+                    end_dt=overall_end,
+                    query=normalized_query,
+                    note="No parsed records from frequent tier, retrying archive",
+                    processed_windows=processed_windows,
+                    queued_windows=len(queue),
+                    discovered_windows=discovered_windows,
+                )
+
+        records = _dedupe_records(records)
+        partial = bool(queue)
+        resume_state = None
+        if partial:
+            resume_state = {
+                "query": normalized_query,
+                "query_syntax": query_syntax,
+                "has_explicit_limit": has_explicit_limit,
+                "pending_windows": _serialize_windows(list(queue)),
+                "discovered_windows": discovered_windows,
+                "archive_attempted": archive_attempted,
+                "overall_start": _format_datetime(overall_start),
+                "overall_end": _format_datetime(overall_end),
+            }
+
         total_elapsed = time.monotonic() - self._progress_started_at
+        final_attempt = attempts[-1] if attempts else {
+            "effective_query": normalized_query,
+            "query_syntax": query_syntax,
+            "tier": queue[0]["tier"] if queue else "TIER_FREQUENT_SEARCH",
+            "from": _format_datetime(overall_start),
+            "to": _format_datetime(overall_end),
+            "raw_rows_received": 0,
+            "records_parsed": 0,
+            "depth": 0,
+        }
         self.last_fetch_details = {
             "endpoint": self._build_url(),
             "requested_query": normalized_query,
@@ -93,98 +209,15 @@ class CoralogixProvider(BaseProvider):
             "to": final_attempt["to"],
             "raw_rows_received": final_attempt["raw_rows_received"],
             "records_parsed": final_attempt["records_parsed"],
-            "window_count": len({(attempt["from"], attempt["to"], attempt["tier"]) for attempt in attempts}),
+            "window_count": processed_windows,
+            "queued_windows_remaining": len(queue),
+            "partial": partial,
+            "resume_available": partial,
+            "resume_state": resume_state,
             "elapsed_seconds": round(total_elapsed, 2),
             "attempts": attempts,
         }
-        return records
-
-    def _fetch_window_records(
-        self,
-        *,
-        query: str,
-        start_dt: datetime,
-        end_dt: datetime,
-        tier: str,
-        query_syntax: str,
-        has_explicit_limit: bool,
-        attempts: list[dict[str, Any]],
-        depth: int = 0,
-    ) -> list[LogRecord]:
-        self._emit_runtime_progress(
-            stage="requesting",
-            tier=tier,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            query=query,
-            note=f"Querying {tier.lower()} window at depth {depth}",
-        )
-        payload = self._build_payload(
-            query=query,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            tier=tier,
-            query_syntax=query_syntax,
-            has_explicit_limit=has_explicit_limit,
-        )
-        items = self._request_with_retries(payload)
-        records = [self._to_record(item) for item in items]
-        attempts.append(self._build_attempt_details(payload, items, records, depth=depth))
-        self._progress_completed += 1
-        self._emit_runtime_progress(
-            stage="received",
-            tier=tier,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            query=payload["query"],
-            note=f"Received {len(records)} parsed record(s) from {tier.lower()}",
-            raw_rows=len(items),
-            parsed_rows=len(records),
-            depth=depth,
-        )
-
-        if (
-            query_syntax == "QUERY_SYNTAX_DATAPRIME"
-            and not has_explicit_limit
-            and len(records) >= self.page_size
-            and (end_dt - start_dt) > self.min_window
-        ):
-            self._progress_expected += 2
-            self._emit_runtime_progress(
-                stage="splitting",
-                tier=tier,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                query=payload["query"],
-                note=f"Chunk hit cap ({self.page_size}); splitting window in half",
-                raw_rows=len(items),
-                parsed_rows=len(records),
-                depth=depth,
-            )
-            midpoint = start_dt + (end_dt - start_dt) / 2
-            left_end = midpoint
-            right_start = midpoint + timedelta(milliseconds=1)
-            left_records = self._fetch_window_records(
-                query=query,
-                start_dt=start_dt,
-                end_dt=left_end,
-                tier=tier,
-                query_syntax=query_syntax,
-                has_explicit_limit=has_explicit_limit,
-                attempts=attempts,
-                depth=depth + 1,
-            )
-            right_records = self._fetch_window_records(
-                query=query,
-                start_dt=right_start,
-                end_dt=end_dt,
-                tier=tier,
-                query_syntax=query_syntax,
-                has_explicit_limit=has_explicit_limit,
-                attempts=attempts,
-                depth=depth + 1,
-            )
-            return _dedupe_records(left_records + right_records)
+        self.resume_state = None
         return records
 
     def _request_with_retries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -392,14 +425,16 @@ class CoralogixProvider(BaseProvider):
         end_dt: datetime,
         query: str,
         note: str,
+        processed_windows: int,
+        queued_windows: int,
+        discovered_windows: int,
         raw_rows: int | None = None,
         parsed_rows: int | None = None,
         depth: int | None = None,
     ) -> None:
         elapsed_seconds = max(0.0, time.monotonic() - getattr(self, "_progress_started_at", time.monotonic()))
-        remaining = max(self._progress_expected - self._progress_completed, 0)
-        eta_seconds = (elapsed_seconds / self._progress_completed * remaining) if self._progress_completed else None
-        progress = self._progress_completed / max(self._progress_expected, 1)
+        eta_seconds = (elapsed_seconds / processed_windows * queued_windows) if processed_windows else None
+        progress = processed_windows / max(processed_windows + queued_windows, 1)
         payload: dict[str, Any] = {
             "provider": "coralogix",
             "stage": stage,
@@ -407,8 +442,9 @@ class CoralogixProvider(BaseProvider):
             "query": query,
             "window_start": _format_datetime(start_dt),
             "window_end": _format_datetime(end_dt),
-            "completed": self._progress_completed,
-            "expected": self._progress_expected,
+            "processed_windows": processed_windows,
+            "queued_windows": queued_windows,
+            "discovered_windows": discovered_windows,
             "progress": progress,
             "elapsed_seconds": elapsed_seconds,
             "eta_seconds": eta_seconds,
@@ -421,6 +457,24 @@ class CoralogixProvider(BaseProvider):
         if depth is not None:
             payload["depth"] = depth
         self._emit_progress(payload)
+
+    def _should_split_window(
+        self,
+        *,
+        query_syntax: str,
+        has_explicit_limit: bool,
+        record_count: int,
+        start_dt: datetime,
+        end_dt: datetime,
+        depth: int,
+    ) -> bool:
+        return (
+            query_syntax == "QUERY_SYNTAX_DATAPRIME"
+            and not has_explicit_limit
+            and record_count >= self.page_size
+            and (end_dt - start_dt) > self.min_window
+            and depth < self.max_depth
+        )
 
     def _build_attempt_details(
         self,
@@ -518,3 +572,35 @@ def _dedupe_records(records: list[LogRecord]) -> list[LogRecord]:
         seen.add(key)
         deduped.append(record)
     return deduped
+
+
+def _split_window(start_dt: datetime, end_dt: datetime, *, tier: str, depth: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    midpoint = start_dt + (end_dt - start_dt) / 2
+    return (
+        {"start_dt": start_dt, "end_dt": midpoint, "tier": tier, "depth": depth},
+        {"start_dt": midpoint + timedelta(milliseconds=1), "end_dt": end_dt, "tier": tier, "depth": depth},
+    )
+
+
+def _serialize_windows(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "start": _format_datetime(window["start_dt"]),
+            "end": _format_datetime(window["end_dt"]),
+            "tier": window["tier"],
+            "depth": window["depth"],
+        }
+        for window in windows
+    ]
+
+
+def _deserialize_windows(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "start_dt": _parse_time_value(str(window["start"]), now=datetime.now(timezone.utc)),
+            "end_dt": _parse_time_value(str(window["end"]), now=datetime.now(timezone.utc)),
+            "tier": str(window["tier"]),
+            "depth": int(window["depth"]),
+        }
+        for window in windows
+    ]

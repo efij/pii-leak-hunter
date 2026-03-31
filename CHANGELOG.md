@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.9] - 2026-03-31
+
+### Changed
+- Coralogix scans now run in bounded window batches instead of one unbounded recursive pass, which makes progress reporting more stable and prevents “forever” runs.
+- Partial Coralogix results can now be resumed from the Streamlit UI, so long scans no longer have to finish in one shot before findings become useful.
+- Streamlit upload and export helpers now clean up temporary files immediately instead of leaving them behind on disk.
+
 ## [5.0.8] - 2026-03-31
 
 ### Changed
