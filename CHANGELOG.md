@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.10] - 2026-03-31
+
+### Fixed
+- Coralogix short-window scans no longer stop after a single empty `source logs` attempt; the provider now retries Lucene wildcard and archive-tier variants before reporting zero parsed records.
+
 ## [5.0.9] - 2026-03-31
 
 ### Changed

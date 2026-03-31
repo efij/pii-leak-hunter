@@ -176,6 +176,109 @@ def test_coralogix_provider_emits_progress_events() -> None:
     assert any(event["stage"] == "received" for event in events)
 
 
+def test_coralogix_provider_retries_default_query_with_lucene_wildcard_when_short_window_returns_zero() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        payload = json.loads(request.read().decode("utf-8"))
+        if calls["count"] == 1:
+            assert payload["metadata"]["tier"] == "TIER_FREQUENT_SEARCH"
+            assert payload["metadata"]["syntax"] == "QUERY_SYNTAX_DATAPRIME"
+            assert payload["query"] == "source logs | limit 5000"
+            return httpx.Response(200, text='{"result":{"results":[]}}')
+        assert payload["metadata"]["tier"] == "TIER_FREQUENT_SEARCH"
+        assert payload["metadata"]["syntax"] == "QUERY_SYNTAX_LUCENE"
+        assert payload["query"] == "*"
+        return httpx.Response(
+            200,
+            text='{"result":{"results":[{"userData":"{\\"message\\": \\"email=user@example.invalid\\"}","metadata":[{"key":"timestamp","value":"2026-03-18T00:00:00Z"}]}]}}',
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = CoralogixProvider(
+        CoralogixConfig(api_key="token", region="us1", base_url="https://api.us1.coralogix.com"),
+        client=client,
+    )
+
+    records = provider.fetch(query="source logs", start="-24h", end="now")
+
+    assert calls["count"] == 2
+    assert len(records) == 1
+    assert provider.last_fetch_details["requested_query"] == "source logs"
+    assert provider.last_fetch_details["effective_query"] == "*"
+    assert provider.last_fetch_details["query_syntax"] == "QUERY_SYNTAX_LUCENE"
+    assert provider.last_fetch_details["query_variants_tried"] == [
+        {
+            "query": "source logs",
+            "query_syntax": "QUERY_SYNTAX_DATAPRIME",
+            "initial_tier": "TIER_FREQUENT_SEARCH",
+            "records": 0,
+        },
+        {
+            "query": "*",
+            "query_syntax": "QUERY_SYNTAX_LUCENE",
+            "initial_tier": "TIER_FREQUENT_SEARCH",
+            "records": 1,
+        },
+    ]
+
+
+def test_coralogix_provider_retries_archive_for_short_default_window_when_frequent_variants_return_zero() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        payload = json.loads(request.read().decode("utf-8"))
+        if calls["count"] == 1:
+            assert payload["metadata"]["tier"] == "TIER_FREQUENT_SEARCH"
+            assert payload["metadata"]["syntax"] == "QUERY_SYNTAX_DATAPRIME"
+            return httpx.Response(200, text='{"result":{"results":[]}}')
+        if calls["count"] == 2:
+            assert payload["metadata"]["tier"] == "TIER_FREQUENT_SEARCH"
+            assert payload["metadata"]["syntax"] == "QUERY_SYNTAX_LUCENE"
+            return httpx.Response(200, text='{"result":{"results":[]}}')
+        assert payload["metadata"]["tier"] == "TIER_ARCHIVE"
+        assert payload["metadata"]["syntax"] == "QUERY_SYNTAX_DATAPRIME"
+        return httpx.Response(
+            200,
+            text='{"result":{"results":[{"userData":"{\\"message\\": \\"archive short-window hit\\"}","metadata":[{"key":"timestamp","value":"2026-03-18T00:00:00Z"}]}]}}',
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = CoralogixProvider(
+        CoralogixConfig(api_key="token", region="us1", base_url="https://api.us1.coralogix.com"),
+        client=client,
+    )
+
+    records = provider.fetch(query="source logs", start="-24h", end="now")
+
+    assert calls["count"] == 3
+    assert len(records) == 1
+    assert records[0].message == "archive short-window hit"
+    assert provider.last_fetch_details["tier"] == "TIER_ARCHIVE"
+    assert provider.last_fetch_details["query_variants_tried"] == [
+        {
+            "query": "source logs",
+            "query_syntax": "QUERY_SYNTAX_DATAPRIME",
+            "initial_tier": "TIER_FREQUENT_SEARCH",
+            "records": 0,
+        },
+        {
+            "query": "*",
+            "query_syntax": "QUERY_SYNTAX_LUCENE",
+            "initial_tier": "TIER_FREQUENT_SEARCH",
+            "records": 0,
+        },
+        {
+            "query": "source logs",
+            "query_syntax": "QUERY_SYNTAX_DATAPRIME",
+            "initial_tier": "TIER_ARCHIVE",
+            "records": 1,
+        },
+    ]
+
+
 def test_datadog_provider_uses_logs_list_api() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v2/logs/events/search"

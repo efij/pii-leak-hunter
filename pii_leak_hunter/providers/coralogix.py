@@ -44,6 +44,7 @@ class CoralogixProvider(BaseProvider):
         if self.resume_state:
             state = self.resume_state
             normalized_query = str(state["query"])
+            requested_query = normalized_query
             query_syntax = str(state["query_syntax"])
             has_explicit_limit = bool(state["has_explicit_limit"])
             queue = deque(_deserialize_windows(state["pending_windows"]))
@@ -65,6 +66,7 @@ class CoralogixProvider(BaseProvider):
         else:
             overall_start, overall_end = _resolve_time_window(start, end, now=now)
             normalized_query = query.strip()
+            requested_query = normalized_query
             query_syntax = "QUERY_SYNTAX_DATAPRIME" if self._looks_like_dataprime_query(normalized_query) else "QUERY_SYNTAX_LUCENE"
             has_explicit_limit = query_syntax == "QUERY_SYNTAX_DATAPRIME" and "| limit " in normalized_query.lower()
             queue = deque([{"start_dt": overall_start, "end_dt": overall_end, "tier": "TIER_FREQUENT_SEARCH", "depth": 0}])
@@ -82,6 +84,157 @@ class CoralogixProvider(BaseProvider):
                 discovered_windows=discovered_windows,
             )
 
+        records, processed_windows, queue, discovered_windows, archive_attempted = self._run_bounded_plan(
+            query=normalized_query,
+            query_syntax=query_syntax,
+            has_explicit_limit=has_explicit_limit,
+            queue=queue,
+            discovered_windows=discovered_windows,
+            archive_attempted=archive_attempted,
+            overall_start=overall_start,
+            overall_end=overall_end,
+            attempts=attempts,
+        )
+
+        query_variants_tried = [
+            {
+                "query": normalized_query,
+                "query_syntax": query_syntax,
+                "initial_tier": "TIER_FREQUENT_SEARCH",
+                "records": len(records),
+            }
+        ]
+        if not records and not queue and not self.resume_state and normalized_query == "source logs":
+            fallback_variants = [
+                {
+                    "query": "*",
+                    "query_syntax": "QUERY_SYNTAX_LUCENE",
+                    "has_explicit_limit": False,
+                    "tier": "TIER_FREQUENT_SEARCH",
+                    "note": "Default DataPrime query returned zero parsed records, retrying Lucene wildcard fallback",
+                },
+                {
+                    "query": "source logs",
+                    "query_syntax": "QUERY_SYNTAX_DATAPRIME",
+                    "has_explicit_limit": False,
+                    "tier": "TIER_ARCHIVE",
+                    "note": "Frequent tier returned zero parsed records, retrying DataPrime against archive",
+                },
+                {
+                    "query": "*",
+                    "query_syntax": "QUERY_SYNTAX_LUCENE",
+                    "has_explicit_limit": False,
+                    "tier": "TIER_ARCHIVE",
+                    "note": "Archive DataPrime retry returned zero parsed records, retrying archive with Lucene wildcard",
+                },
+            ]
+            for variant in fallback_variants:
+                fallback_queue = deque(
+                    [{"start_dt": overall_start, "end_dt": overall_end, "tier": variant["tier"], "depth": 0}]
+                )
+                self._emit_runtime_progress(
+                    stage="fallback_query",
+                    tier=variant["tier"],
+                    start_dt=overall_start,
+                    end_dt=overall_end,
+                    query=str(variant["query"]),
+                    note=str(variant["note"]),
+                    processed_windows=0,
+                    queued_windows=1,
+                    discovered_windows=1,
+                )
+                variant_records, variant_processed, variant_queue, variant_discovered, variant_archive_attempted = (
+                    self._run_bounded_plan(
+                        query=str(variant["query"]),
+                        query_syntax=str(variant["query_syntax"]),
+                        has_explicit_limit=bool(variant["has_explicit_limit"]),
+                        queue=fallback_queue,
+                        discovered_windows=1,
+                        archive_attempted=variant["tier"] == "TIER_ARCHIVE",
+                        overall_start=overall_start,
+                        overall_end=overall_end,
+                        attempts=attempts,
+                    )
+                )
+                query_variants_tried.append(
+                    {
+                        "query": variant["query"],
+                        "query_syntax": variant["query_syntax"],
+                        "initial_tier": variant["tier"],
+                        "records": len(variant_records),
+                    }
+                )
+                if variant_records or variant_queue:
+                    records = variant_records
+                    processed_windows = variant_processed
+                    queue = variant_queue
+                    discovered_windows = variant_discovered
+                    archive_attempted = variant_archive_attempted
+                    normalized_query = str(variant["query"])
+                    query_syntax = str(variant["query_syntax"])
+                    has_explicit_limit = bool(variant["has_explicit_limit"])
+                    break
+
+        partial = bool(queue)
+        resume_state = None
+        if partial:
+            resume_state = {
+                "query": normalized_query,
+                "query_syntax": query_syntax,
+                "has_explicit_limit": has_explicit_limit,
+                "pending_windows": _serialize_windows(list(queue)),
+                "discovered_windows": discovered_windows,
+                "archive_attempted": archive_attempted,
+                "overall_start": _format_datetime(overall_start),
+                "overall_end": _format_datetime(overall_end),
+            }
+
+        total_elapsed = time.monotonic() - self._progress_started_at
+        final_attempt = attempts[-1] if attempts else {
+            "effective_query": normalized_query,
+            "query_syntax": query_syntax,
+            "tier": queue[0]["tier"] if queue else "TIER_FREQUENT_SEARCH",
+            "from": _format_datetime(overall_start),
+            "to": _format_datetime(overall_end),
+            "raw_rows_received": 0,
+            "records_parsed": 0,
+            "depth": 0,
+        }
+        self.last_fetch_details = {
+            "endpoint": self._build_url(),
+            "requested_query": requested_query,
+            "effective_query": final_attempt["effective_query"],
+            "query_syntax": final_attempt["query_syntax"],
+            "tier": final_attempt["tier"],
+            "from": final_attempt["from"],
+            "to": final_attempt["to"],
+            "raw_rows_received": final_attempt["raw_rows_received"],
+            "records_parsed": final_attempt["records_parsed"],
+            "window_count": processed_windows,
+            "queued_windows_remaining": len(queue),
+            "partial": partial,
+            "resume_available": partial,
+            "resume_state": resume_state,
+            "query_variants_tried": query_variants_tried,
+            "elapsed_seconds": round(total_elapsed, 2),
+            "attempts": attempts,
+        }
+        self.resume_state = None
+        return records
+
+    def _run_bounded_plan(
+        self,
+        *,
+        query: str,
+        query_syntax: str,
+        has_explicit_limit: bool,
+        queue: deque[dict[str, Any]],
+        discovered_windows: int,
+        archive_attempted: bool,
+        overall_start: datetime,
+        overall_end: datetime,
+        attempts: list[dict[str, Any]],
+    ) -> tuple[list[LogRecord], int, deque[dict[str, Any]], int, bool]:
         records: list[LogRecord] = []
         processed_windows = 0
         while queue and processed_windows < self.max_windows_per_run:
@@ -95,14 +248,14 @@ class CoralogixProvider(BaseProvider):
                 tier=tier,
                 start_dt=start_dt,
                 end_dt=end_dt,
-                query=normalized_query,
+                query=query,
                 note=f"Querying {tier.lower()} window at depth {depth}",
                 processed_windows=processed_windows,
                 queued_windows=len(queue) + 1,
                 discovered_windows=discovered_windows,
             )
             payload = self._build_payload(
-                query=normalized_query,
+                query=query,
                 start_dt=start_dt,
                 end_dt=end_dt,
                 tier=tier,
@@ -166,59 +319,14 @@ class CoralogixProvider(BaseProvider):
                     tier="TIER_ARCHIVE",
                     start_dt=overall_start,
                     end_dt=overall_end,
-                    query=normalized_query,
+                    query=query,
                     note="No parsed records from frequent tier, retrying archive",
                     processed_windows=processed_windows,
                     queued_windows=len(queue),
                     discovered_windows=discovered_windows,
                 )
 
-        records = _dedupe_records(records)
-        partial = bool(queue)
-        resume_state = None
-        if partial:
-            resume_state = {
-                "query": normalized_query,
-                "query_syntax": query_syntax,
-                "has_explicit_limit": has_explicit_limit,
-                "pending_windows": _serialize_windows(list(queue)),
-                "discovered_windows": discovered_windows,
-                "archive_attempted": archive_attempted,
-                "overall_start": _format_datetime(overall_start),
-                "overall_end": _format_datetime(overall_end),
-            }
-
-        total_elapsed = time.monotonic() - self._progress_started_at
-        final_attempt = attempts[-1] if attempts else {
-            "effective_query": normalized_query,
-            "query_syntax": query_syntax,
-            "tier": queue[0]["tier"] if queue else "TIER_FREQUENT_SEARCH",
-            "from": _format_datetime(overall_start),
-            "to": _format_datetime(overall_end),
-            "raw_rows_received": 0,
-            "records_parsed": 0,
-            "depth": 0,
-        }
-        self.last_fetch_details = {
-            "endpoint": self._build_url(),
-            "requested_query": normalized_query,
-            "effective_query": final_attempt["effective_query"],
-            "query_syntax": final_attempt["query_syntax"],
-            "tier": final_attempt["tier"],
-            "from": final_attempt["from"],
-            "to": final_attempt["to"],
-            "raw_rows_received": final_attempt["raw_rows_received"],
-            "records_parsed": final_attempt["records_parsed"],
-            "window_count": processed_windows,
-            "queued_windows_remaining": len(queue),
-            "partial": partial,
-            "resume_available": partial,
-            "resume_state": resume_state,
-            "elapsed_seconds": round(total_elapsed, 2),
-            "attempts": attempts,
-        }
-        self.resume_state = None
-        return records
+        return _dedupe_records(records), processed_windows, queue, discovered_windows, archive_attempted
 
     def _request_with_retries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         last_error: Exception | None = None
