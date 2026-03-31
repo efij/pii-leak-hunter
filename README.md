@@ -159,6 +159,7 @@ That default remote flow means:
 - the scan window defaults to the past 24 hours
 - the engine hunts for secrets, PII, masking failures, and risky combinations across whatever logs are returned
 - Coralogix uses a `source logs` DataPrime query by default so “scan everything” does not rely on Lucene wildcard behavior
+- For longer Coralogix windows, the scanner automatically retries archive search when frequent search comes back empty
 
 Run scan with another provider without knowing its query language:
 

@@ -80,6 +80,36 @@ def test_coralogix_provider_parses_dataprime_user_data_rows() -> None:
     assert provider.last_fetch_details["records_parsed"] == 1
 
 
+def test_coralogix_provider_falls_back_to_archive_for_long_windows() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        body = request.read().decode("utf-8")
+        if calls["count"] == 1:
+            assert '"tier":"TIER_FREQUENT_SEARCH"' in body or '"tier": "TIER_FREQUENT_SEARCH"' in body
+            return httpx.Response(200, text='{"result":{"results":[]}}')
+        assert '"tier":"TIER_ARCHIVE"' in body or '"tier": "TIER_ARCHIVE"' in body
+        return httpx.Response(
+            200,
+            text='{"result":{"results":[{"userData":"{\\"message\\": \\"archive email=user@example.invalid\\"}","metadata":[{"key":"timestamp","value":"2026-03-01T00:00:00Z"}]}]}}',
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = CoralogixProvider(
+        CoralogixConfig(api_key="token", region="us1", base_url="https://api.us1.coralogix.com"),
+        client=client,
+    )
+
+    records = provider.fetch(query="source logs", start="-720h", end="now")
+
+    assert len(records) == 1
+    assert records[0].message == "archive email=user@example.invalid"
+    assert calls["count"] == 2
+    assert len(provider.last_fetch_details["attempts"]) == 2
+    assert provider.last_fetch_details["tier"] == "TIER_ARCHIVE"
+
+
 def test_datadog_provider_uses_logs_list_api() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v2/logs/events/search"

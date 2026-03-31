@@ -29,18 +29,33 @@ class CoralogixProvider(BaseProvider):
         self.page_size = page_size
 
     def fetch(self, query: str, start: str, end: str) -> list[LogRecord]:
-        payload = self._build_payload(query=query, start=start, end=end)
-        items = self._request_with_retries(payload)
-        records = [self._to_record(item) for item in items]
+        attempts: list[dict[str, Any]] = []
+
+        primary_payload = self._build_payload(query=query, start=start, end=end, tier="TIER_FREQUENT_SEARCH")
+        primary_items = self._request_with_retries(primary_payload)
+        primary_records = [self._to_record(item) for item in primary_items]
+        attempts.append(self._build_attempt_details(primary_payload, primary_items, primary_records))
+
+        records = list(primary_records)
+        if not records and _should_try_archive(start, end):
+            archive_payload = self._build_payload(query=query, start=start, end=end, tier="TIER_ARCHIVE")
+            archive_items = self._request_with_retries(archive_payload)
+            archive_records = [self._to_record(item) for item in archive_items]
+            attempts.append(self._build_attempt_details(archive_payload, archive_items, archive_records))
+            records = archive_records
+
+        final_attempt = attempts[-1]
         self.last_fetch_details = {
             "endpoint": self._build_url(),
             "requested_query": query,
-            "effective_query": payload["query"],
-            "query_syntax": payload["metadata"]["syntax"],
-            "from": payload["metadata"]["startDate"],
-            "to": payload["metadata"]["endDate"],
-            "raw_rows_received": len(items),
-            "records_parsed": len(records),
+            "effective_query": final_attempt["effective_query"],
+            "query_syntax": final_attempt["query_syntax"],
+            "tier": final_attempt["tier"],
+            "from": final_attempt["from"],
+            "to": final_attempt["to"],
+            "raw_rows_received": final_attempt["raw_rows_received"],
+            "records_parsed": final_attempt["records_parsed"],
+            "attempts": attempts,
         }
         return records
 
@@ -197,10 +212,10 @@ class CoralogixProvider(BaseProvider):
     def _build_url(self) -> str:
         return f"{self.config.base_url}/api/v1/dataprime/query"
 
-    def _build_payload(self, *, query: str, start: str, end: str) -> dict[str, Any]:
+    def _build_payload(self, *, query: str, start: str, end: str, tier: str) -> dict[str, Any]:
         normalized_query = query.strip()
         metadata = {
-            "tier": "TIER_FREQUENT_SEARCH",
+            "tier": tier,
             "startDate": _to_coralogix_time(start),
             "endDate": _to_coralogix_time(end),
             "defaultSource": "logs",
@@ -231,6 +246,22 @@ class CoralogixProvider(BaseProvider):
             if details:
                 return f"{error} | response={details}"
         return str(error)
+
+    def _build_attempt_details(
+        self,
+        payload: dict[str, Any],
+        items: list[dict[str, Any]],
+        records: list[LogRecord],
+    ) -> dict[str, Any]:
+        return {
+            "effective_query": payload["query"],
+            "query_syntax": payload["metadata"]["syntax"],
+            "tier": payload["metadata"]["tier"],
+            "from": payload["metadata"]["startDate"],
+            "to": payload["metadata"]["endDate"],
+            "raw_rows_received": len(items),
+            "records_parsed": len(records),
+        }
 
 
 def _to_coralogix_time(value: str) -> str:
@@ -276,3 +307,19 @@ def _extract_field_from_pairs(pairs: list[Any], candidate_keys: set[str]) -> str
             if value is not None:
                 return str(value)
     return None
+
+
+def _should_try_archive(start: str, end: str) -> bool:
+    if end.strip().lower() not in {"", "now"}:
+        return True
+    match = _RELATIVE_TIME_RE.match(start.strip())
+    if not match:
+        return True
+    amount, unit = match.groups()
+    hours = {
+        "m": int(amount) / 60,
+        "h": int(amount),
+        "d": int(amount) * 24,
+        "w": int(amount) * 24 * 7,
+    }[unit]
+    return hours >= 168

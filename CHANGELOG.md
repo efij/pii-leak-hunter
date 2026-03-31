@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.5] - 2026-03-31
+
+### Fixed
+- Coralogix long-window scans now fall back from `TIER_FREQUENT_SEARCH` to `TIER_ARCHIVE` when the initial query returns no parsed records, which improves `720h`-style scans.
+- Provider diagnostics now include the per-tier attempts used during a Coralogix scan so it is clear whether the tool searched frequent storage, archive, or both.
+
 ## [5.0.4] - 2026-03-31
 
 ### Fixed
