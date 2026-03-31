@@ -16,7 +16,14 @@ from pii_leak_hunter.output.html_writer import write_html_report
 from pii_leak_hunter.output.json_writer import write_json
 from pii_leak_hunter.output.markdown_writer import write_markdown
 from pii_leak_hunter.output.sarif_writer import write_sarif
-from pii_leak_hunter.providers.factory import SUPPORTED_PROVIDERS, build_provider, normalize_provider_name
+from pii_leak_hunter.providers.factory import (
+    DEFAULT_PROVIDER_LOOKBACK,
+    SUPPORTED_PROVIDERS,
+    build_provider,
+    normalize_provider_name,
+    provider_query_hint,
+    resolve_provider_scan_options,
+)
 from pii_leak_hunter.security.least_privilege import PRESETS, get_preset
 from pii_leak_hunter.ui.presentation import (
     build_diff_summary,
@@ -99,21 +106,47 @@ def _render_local_scan_controls(*, baseline_upload, unsafe_show_values: bool) ->
 
 def _render_remote_scan_controls(*, baseline_upload, unsafe_show_values: bool) -> None:
     provider_name = st.selectbox("Provider", options=list(SUPPORTED_PROVIDERS), index=0)
-    query = st.text_input("Query", value=_default_query(provider_name))
-    start = st.text_input("From", value="-24h")
+    remote_scope = st.radio(
+        "Remote scope",
+        ["All logs for leaks", "Custom provider filter"],
+        horizontal=True,
+        key="remote-scope",
+    )
+    custom_query = ""
+    if remote_scope == "Custom provider filter":
+        custom_query = st.text_input(
+            "Provider filter",
+            value="",
+            placeholder=provider_query_hint(provider_name),
+            help="Optional provider-native filter. Leave it empty to fall back to all logs.",
+        )
+    else:
+        st.info(
+            f"No provider query needed. We'll scan all {provider_name} logs in the selected time window and hunt for secrets and PII automatically."
+        )
+    start = st.text_input(
+        "From",
+        value=DEFAULT_PROVIDER_LOOKBACK,
+        help="Defaults to the past 24 hours if you leave it alone.",
+    )
     end = st.text_input("To", value="now")
-    if st.button("Run Remote Scan", type="primary", key="scan-remote"):
+    if st.button(f"Scan {provider_name.title()} for leaks", type="primary", key="scan-remote"):
         try:
+            resolved_query, resolved_start = resolve_provider_scan_options(
+                provider_name,
+                custom_query if remote_scope == "Custom provider filter" else None,
+                start,
+            )
             provider = build_provider(provider_name)
-            records = provider.fetch(query=query, start=start, end=end)
+            records = provider.fetch(query=resolved_query, start=resolved_start, end=end)
             result = Pipeline().run(
                 records,
                 source=normalize_provider_name(provider_name),
                 metadata={
                     "mode": "remote",
                     "provider": normalize_provider_name(provider_name),
-                    "query": query,
-                    "from": start,
+                    "query": resolved_query,
+                    "from": resolved_start,
                     "to": end,
                 },
             )
@@ -421,17 +454,6 @@ def _write_temp_export(kind: str, result: ScanResult, include_values: bool) -> P
     else:
         raise ValueError(f"Unsupported export kind: {kind}")
     return temp_path
-
-
-def _default_query(provider_name: str) -> str:
-    defaults = {
-        "coralogix": 'source:"mailer-service"',
-        "datadog": "service:mailer-service",
-        "dynatrace": 'contains(content, "mailer-service")',
-        "splunk": 'index=main service="mailer-service"',
-        "newrelic": "`service.name` = 'mailer-service'",
-    }
-    return defaults.get(normalize_provider_name(provider_name), "*")
 
 
 def _render_hero() -> None:

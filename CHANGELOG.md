@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [4.0.0] - 2026-03-31
+
+### Added
+- Default remote-provider scan mode that hunts across all logs without requiring provider query syntax.
+- Shared provider scan defaults for queryless remote scans and a default `-24h` lookback window.
+- Streamlit remote scan UX for “all logs for leaks” with optional custom provider filters.
+
+### Changed
+- `scan --provider <name>` now works without `--query` or `--from`; both are optional overrides.
+- The web console now mirrors the CLI behavior so remote provider scans work even when the operator does not know the provider query language.
+- Documentation now teaches the default remote scan flow first and treats provider-native filters as optional narrowing.
+
 ## [3.0.0] - 2026-03-30
 
 ### Added

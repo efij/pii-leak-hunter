@@ -89,6 +89,8 @@ class NewRelicProvider(BaseProvider):
             return stripped
         since = _to_nrql_time(start)
         until = _to_nrql_time(end)
+        if stripped in {"", "*"}:
+            return f"SELECT * FROM Log SINCE {since} UNTIL {until} LIMIT {self.limit}"
         return (
             f"SELECT * FROM Log WHERE {stripped} "
             f"SINCE {since} UNTIL {until} LIMIT {self.limit}"

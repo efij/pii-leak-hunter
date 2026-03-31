@@ -16,6 +16,21 @@ from pii_leak_hunter.utils.config import (
 
 
 SUPPORTED_PROVIDERS = ("coralogix", "datadog", "dynatrace", "splunk", "newrelic")
+DEFAULT_PROVIDER_LOOKBACK = "-24h"
+DEFAULT_PROVIDER_QUERIES = {
+    "coralogix": "*",
+    "datadog": "*",
+    "dynatrace": "*",
+    "splunk": "*",
+    "newrelic": "*",
+}
+PROVIDER_QUERY_HINTS = {
+    "coralogix": 'Optional: source:"mailer-service"',
+    "datadog": "Optional: service:mailer-service",
+    "dynatrace": 'Optional: contains(content, "mailer-service")',
+    "splunk": 'Optional: index=main service="mailer-service"',
+    "newrelic": "Optional: `service.name` = 'mailer-service'",
+}
 
 
 def build_provider(name: str) -> BaseProvider:
@@ -35,3 +50,21 @@ def build_provider(name: str) -> BaseProvider:
 
 def normalize_provider_name(name: str) -> str:
     return name.strip().lower().replace("-", "")
+
+
+def default_provider_query(name: str) -> str:
+    return DEFAULT_PROVIDER_QUERIES.get(normalize_provider_name(name), "*")
+
+
+def provider_query_hint(name: str) -> str:
+    return PROVIDER_QUERY_HINTS.get(normalize_provider_name(name), "Optional provider-native filter")
+
+
+def resolve_provider_scan_options(
+    name: str,
+    query: str | None = None,
+    start: str | None = None,
+) -> tuple[str, str]:
+    normalized_query = query.strip() if query and query.strip() else default_provider_query(name)
+    normalized_start = start.strip() if start and start.strip() else DEFAULT_PROVIDER_LOOKBACK
+    return normalized_query, normalized_start

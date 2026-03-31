@@ -34,12 +34,36 @@ def test_scan_file_generates_outputs_and_threshold_exit(tmp_path: Path) -> None:
 
 
 def test_scan_requires_coralogix_configuration() -> None:
-    result = runner.invoke(app, ["scan", "--query", "source:api", "--from", "-1h"])
+    result = runner.invoke(app, ["scan"])
     assert result.exit_code == 1
     assert "CORALOGIX_API_KEY" in result.stderr
 
 
 def test_scan_supports_other_providers(monkeypatch) -> None:
+    class FakeProvider:
+        def fetch(self, query: str, start: str, end: str):
+            assert query == "*"
+            assert start == "-24h"
+            assert end == "now"
+            return [
+                LogRecord(
+                    timestamp="2026-03-18T00:00:00Z",
+                    message="owner@example.test",
+                    attributes={"message": "owner@example.test"},
+                    source="datadog",
+                )
+            ]
+
+    monkeypatch.setattr("pii_leak_hunter.cli.main.build_provider", lambda name: FakeProvider())
+    result = runner.invoke(
+        app,
+        ["scan", "--provider", "datadog"],
+    )
+    assert result.exit_code == 0
+    assert "Scanned 1 record(s) from datadog." in result.stdout
+
+
+def test_scan_supports_custom_provider_filters(monkeypatch) -> None:
     class FakeProvider:
         def fetch(self, query: str, start: str, end: str):
             assert query == "service:mailer"

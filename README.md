@@ -148,16 +148,26 @@ export NEW_RELIC_REGION=us
 ### 3. Run scan (Coralogix)
 
 ```bash
-pii-leak-hunter scan   --query 'source:"mailer-service"'   --from '-24h'   --out-json findings.json   --out-csv findings.csv   --fail-on critical
+pii-leak-hunter scan --out-json findings.json --out-csv findings.csv --fail-on critical
 ```
 
-Run scan with another provider:
+That default remote flow means:
+
+- no provider query is required
+- the scan window defaults to the past 24 hours
+- the engine hunts for secrets, PII, masking failures, and risky combinations across whatever logs are returned
+
+Run scan with another provider without knowing its query language:
 
 ```bash
-pii-leak-hunter scan \
-  --provider datadog \
-  --query 'service:mailer-service' \
-  --from '-24h'
+pii-leak-hunter scan --provider datadog
+```
+
+If you do want to narrow the scope, the provider filter is still available:
+
+```bash
+pii-leak-hunter scan --provider datadog --query 'service:mailer-service'
+pii-leak-hunter scan --provider splunk --query 'index=main service="mailer-service"' --from '-6h'
 ```
 
 Run scan with a unified target:
@@ -182,6 +192,7 @@ streamlit run pii_leak_hunter/ui/app.py
 The web console now includes:
 
 - Local file and remote-provider scan flows
+- Default “scan all logs for leaks” mode for remote providers, with optional custom provider filters
 - Optional baseline artifact upload from prior safe JSON or evidence packs
 - Severity and exploitability overview cards
 - Grouped findings drill-down with masked previews
@@ -246,7 +257,7 @@ docker run --rm \
   -e DATADOG_APP_KEY \
   -e DATADOG_SITE \
   pii-leak-hunter \
-  pii-leak-hunter scan --provider datadog --query 'service:mailer-service' --from '-24h'
+  pii-leak-hunter scan --provider datadog
 ```
 
 Run the Streamlit UI:

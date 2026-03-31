@@ -12,7 +12,12 @@ from pii_leak_hunter.output.csv_writer import write_csv
 from pii_leak_hunter.output.json_writer import write_json
 from pii_leak_hunter.output.markdown_writer import write_markdown
 from pii_leak_hunter.output.sarif_writer import write_sarif
-from pii_leak_hunter.providers.factory import SUPPORTED_PROVIDERS, build_provider, normalize_provider_name
+from pii_leak_hunter.providers.factory import (
+    SUPPORTED_PROVIDERS,
+    build_provider,
+    normalize_provider_name,
+    resolve_provider_scan_options,
+)
 from pii_leak_hunter.scoring.risk import exceeds_threshold
 from pii_leak_hunter.security.least_privilege import PRESETS, get_preset, validate_preset
 from pii_leak_hunter.sources.registry import build_source, is_target_source
@@ -64,8 +69,16 @@ def scan_file(
 def scan(
     target: str | None = typer.Argument(None),
     provider: str = typer.Option("coralogix", "--provider"),
-    query: str | None = typer.Option(None, "--query"),
-    from_: str | None = typer.Option(None, "--from"),
+    query: str | None = typer.Option(
+        None,
+        "--query",
+        help="Optional provider-native filter. Omit it to scan all logs for leaks.",
+    ),
+    from_: str | None = typer.Option(
+        None,
+        "--from",
+        help="Start time for the scan window. Defaults to -24h.",
+    ),
     to: str = typer.Option("now", "--to"),
     out_json: Path | None = typer.Option(None, "--out-json"),
     out_md: Path | None = typer.Option(None, "--out-md"),
@@ -104,16 +117,19 @@ def scan(
             raise typer.BadParameter(
                 f"provider must be one of {', '.join(SUPPORTED_PROVIDERS)}"
             )
-        if not query:
-            raise typer.BadParameter("--query is required when scanning a remote provider")
-        if not from_:
-            raise typer.BadParameter("--from is required when scanning a remote provider")
+        resolved_query, resolved_from = resolve_provider_scan_options(provider_name, query, from_)
         client = build_provider(provider_name)
-        records = client.fetch(query=query, start=from_, end=to)
+        records = client.fetch(query=resolved_query, start=resolved_from, end=to)
         result = Pipeline().run(
             records,
             source=provider_name,
-            metadata={"mode": "remote", "provider": provider_name, "query": query, "from": from_, "to": to},
+            metadata={
+                "mode": "remote",
+                "provider": provider_name,
+                "query": resolved_query,
+                "from": resolved_from,
+                "to": to,
+            },
         )
         result = _apply_baseline_if_requested(result, baseline_in=baseline_in, new_only=new_only)
         _emit_outputs(

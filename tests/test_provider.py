@@ -164,3 +164,35 @@ def test_new_relic_provider_builds_nrql_query() -> None:
     records = provider.fetch(query="`service.name` = 'mailer-service'", start="-24h", end="now")
     assert len(records) == 1
     assert records[0].source == "newrelic"
+
+
+def test_new_relic_provider_supports_all_logs_default_query() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = request.read().decode("utf-8")
+        assert "SELECT * FROM Log SINCE 24 hours ago UNTIL NOW LIMIT 200" in payload
+        assert "WHERE *" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "actor": {
+                        "account": {
+                            "nrql": {
+                                "results": [
+                                    {"message": "token=abc", "timestamp": "2026-03-18T00:00:00Z"}
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = NewRelicProvider(
+        NewRelicConfig(api_key="api-key", account_id=12345, region="us", base_url="https://api.newrelic.com/graphql"),
+        client=client,
+    )
+    records = provider.fetch(query="*", start="-24h", end="now")
+    assert len(records) == 1
+    assert records[0].source == "newrelic"
