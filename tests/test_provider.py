@@ -51,8 +51,8 @@ def test_coralogix_provider_uses_dataprime_query_endpoint() -> None:
 
 
 def test_coralogix_region_builder_accepts_app_hosts() -> None:
-    assert _build_base_url("https://tipalti-us.app.coralogix.us") == "https://api.us1.coralogix.com"
-    assert _build_base_url("tipalti-us.app.coralogix.us") == "https://api.us1.coralogix.com"
+    assert _build_base_url("https://your-team.app.coralogix.us") == "https://api.us1.coralogix.com"
+    assert _build_base_url("your-team.app.coralogix.us") == "https://api.us1.coralogix.com"
 
 
 def test_datadog_provider_uses_logs_list_api() -> None:

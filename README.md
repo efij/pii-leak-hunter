@@ -121,7 +121,7 @@ export CORALOGIX_API_KEY=your_api_key
 export CORALOGIX_REGION=us1
 ```
 
-`CORALOGIX_REGION` can be either a short region like `us1` or `eu1`, an API host like `api.us1.coralogix.com`, or your full Coralogix app URL like `https://tipalti-us.app.coralogix.us`.
+`CORALOGIX_REGION` can be either a short region like `us1` or `eu1`, an API host, or your full Coralogix app URL.
 
 Other supported providers use these environment variables:
 
@@ -129,14 +129,14 @@ Other supported providers use these environment variables:
 # Datadog
 export DATADOG_API_KEY=your_api_key
 export DATADOG_APP_KEY=your_application_key
-export DATADOG_SITE=datadoghq.com
+export DATADOG_SITE=your_site
 
 # Dynatrace
 export DYNATRACE_API_TOKEN=your_api_token
-export DYNATRACE_ENV_URL=https://your-environment.live.dynatrace.com
+export DYNATRACE_ENV_URL=https://your_environment_url
 
 # Splunk
-export SPLUNK_BASE_URL=https://your-splunk-host:8089
+export SPLUNK_BASE_URL=https://your_splunk_url
 export SPLUNK_TOKEN=your_token
 
 # New Relic
@@ -168,8 +168,8 @@ pii-leak-hunter scan --provider datadog
 If you do want to narrow the scope, the provider filter is still available:
 
 ```bash
-pii-leak-hunter scan --provider datadog --query 'service:mailer-service'
-pii-leak-hunter scan --provider splunk --query 'index=main service="mailer-service"' --from '-6h'
+pii-leak-hunter scan --provider datadog --query 'service:your-service'
+pii-leak-hunter scan --provider splunk --query 'index=main service="your-service"' --from '-6h'
 ```
 
 Run scan with a unified target:
@@ -179,7 +179,7 @@ pii-leak-hunter scan fixtures/demo_logs.ndjson
 pii-leak-hunter scan file:///absolute/path/to/logs/
 pii-leak-hunter scan postgres://user:pass@host:5432/dbname?schema=public&row_limit=1000
 pii-leak-hunter scan s3://bucket/path/to/logs/
-pii-leak-hunter scan 'servicenow://acme.service-now.com?table=incident&query=active=true'
+pii-leak-hunter scan 'servicenow://your-instance-host?table=incident&query=active=true'
 pii-leak-hunter scan 'notion://workspace?query=prod&page_size=25'
 ```
 

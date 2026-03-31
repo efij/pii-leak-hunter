@@ -4,13 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.3] - 2026-03-31
+
+### Changed
+- Replaced user-facing tenant-style host examples with generic placeholders in the README, Streamlit UI, and Coralogix regression tests.
+- Simplified provider form defaults so the UI no longer pre-fills concrete vendor-style URLs where a user-specific host is required.
+
 ## [5.0.2] - 2026-03-31
 
 ### Fixed
 - Coralogix scans now use the current DataPrime query endpoint instead of the older logs search endpoint that could fail in both the CLI and Streamlit UI.
 - Coralogix request payloads now send the documented query metadata, including absolute UTC time windows, so default `-24h` lookbacks work reliably.
 - Coralogix responses now handle NDJSON-style query output instead of assuming a legacy JSON object shape.
-- `CORALOGIX_REGION` now accepts short region codes, API hosts, and full Coralogix app URLs such as `https://tipalti-us.app.coralogix.us`.
+- `CORALOGIX_REGION` now accepts short region codes, API hosts, and full Coralogix app URLs.
 - The Streamlit Coralogix credential form now makes the accepted host and region formats explicit.
 
 ## [5.0.1] - 2026-03-31

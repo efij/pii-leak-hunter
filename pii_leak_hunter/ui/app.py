@@ -235,16 +235,16 @@ def _render_provider_credentials(provider_name: str) -> None:
     if provider == "coralogix":
         _secret_input("CORALOGIX_API_KEY", "API key", prefix="provider")
         _text_input("CORALOGIX_REGION", "Region, app host, or API host", prefix="provider", default="")
-        st.caption("Examples: `us1`, `api.us1.coralogix.com`, or `https://tipalti-us.app.coralogix.us`.")
+        st.caption("Use a short region like `us1`, an API host, or paste your full Coralogix app URL.")
     elif provider == "datadog":
         _secret_input("DATADOG_API_KEY", "API key", prefix="provider")
         _secret_input("DATADOG_APP_KEY", "Application key", prefix="provider")
-        _text_input("DATADOG_SITE", "Site", prefix="provider", default="datadoghq.com")
+        _text_input("DATADOG_SITE", "Site", prefix="provider", default="")
     elif provider == "dynatrace":
         _secret_input("DYNATRACE_API_TOKEN", "API token", prefix="provider")
-        _text_input("DYNATRACE_ENV_URL", "Environment URL", prefix="provider", default="https://tenant.live.dynatrace.com")
+        _text_input("DYNATRACE_ENV_URL", "Environment URL", prefix="provider", default="")
     elif provider == "splunk":
-        _text_input("SPLUNK_BASE_URL", "Base URL", prefix="provider", default="https://splunk.example.com:8089")
+        _text_input("SPLUNK_BASE_URL", "Base URL", prefix="provider", default="")
         auth_mode = st.radio(
             "Splunk auth",
             ["Bearer token", "Username / password"],
@@ -341,7 +341,7 @@ def _build_target_configuration(target_mode: str) -> tuple[str, dict[str, str | 
         env_overrides["AWS_DEFAULT_REGION"] = env_overrides.get("AWS_REGION")
         return target if bucket.strip() else "", env_overrides, "Optional AWS credentials override the runtime identity for this session."
     if target_mode == "ServiceNow":
-        instance = st.text_input("Instance host", value="acme.service-now.com", key="target-snow-instance")
+        instance = st.text_input("Instance host", value="", key="target-snow-instance")
         table = st.text_input("Table", value="incident", key="target-snow-table")
         query = st.text_input("Query", value="active=true", key="target-snow-query")
         page_size = st.number_input("Page size", min_value=1, value=100, step=25, key="target-snow-page-size")
