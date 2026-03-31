@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.0] - 2026-03-31
+
+### Added
+- A full multi-source Streamlit scan console with tabs for remote providers, target or URI builders, uploaded files, and least-privilege guidance.
+- In-session credential and connection forms for Coralogix, Datadog, Dynatrace, Splunk, New Relic, ServiceNow, Notion, and optional AWS-backed S3 scans.
+- GUI target builders for local paths, Postgres, S3, ServiceNow, and Notion.
+- Visible scan progress, active scan summary, and recent scan history in the GUI.
+- GUI baseline artifact export so a web-driven scan can feed the incremental workflow without dropping to the CLI.
+
+### Changed
+- The Streamlit UI now covers the main scan flows that previously required CLI or shell environment setup.
+- The web console now behaves like an operator console instead of a thin demo layer.
+- README guidance now documents session-only provider configuration and the richer GUI workflow.
+
 ## [4.0.0] - 2026-03-31
 
 ### Added
