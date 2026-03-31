@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.1] - 2026-03-31
+
+### Fixed
+- Datadog remote scans now use the current `v2` logs search API instead of the older request shape that could return immediate `400 Bad Request` responses.
+- Default Datadog “all logs for leaks” scans now omit the provider query field entirely instead of sending a wildcard query that may be rejected.
+- Datadog API failures now include returned error details when available so the GUI shows a more useful failure message.
+
 ## [5.0.0] - 2026-03-31
 
 ### Added

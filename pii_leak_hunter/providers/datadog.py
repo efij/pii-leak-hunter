@@ -31,25 +31,31 @@ class DatadogProvider(BaseProvider):
     def _paginate(self, *, query: str, start: str, end: str) -> Iterator[list[dict[str, Any]]]:
         cursor: str | None = None
         while True:
-            payload = {
-                "index": "*",
-                "limit": self.page_size,
-                "query": query,
-                "sort": "desc",
-                "time": {
+            payload: dict[str, Any] = {
+                "filter": {
                     "from": start,
                     "to": end,
                 },
+                "page": {
+                    "limit": self.page_size,
+                },
+                "sort": "-timestamp",
             }
             if cursor:
-                payload["startAt"] = cursor
+                payload["page"]["cursor"] = cursor
+            if query.strip() and query.strip() != "*":
+                payload["filter"]["query"] = query.strip()
 
             body = self._request_with_retries(payload)
-            items = body.get("logs", [])
+            items = body.get("data", [])
             if not isinstance(items, list) or not items:
                 break
             yield [item for item in items if isinstance(item, dict)]
-            cursor = body.get("nextLogId")
+            cursor = (
+                body.get("meta", {}).get("page", {}).get("after")
+                if isinstance(body.get("meta"), dict)
+                else None
+            )
             if not cursor:
                 break
 
@@ -58,7 +64,7 @@ class DatadogProvider(BaseProvider):
         for attempt in range(1, 4):
             try:
                 response = self.client.post(
-                    f"{self.config.base_url}/api/v1/logs-queries/list",
+                    f"{self.config.base_url}/api/v2/logs/events/search",
                     headers={
                         "Accept": "application/json",
                         "Content-Type": "application/json",
@@ -83,13 +89,33 @@ class DatadogProvider(BaseProvider):
                 if attempt >= 3:
                     break
                 time.sleep(0.2 * attempt)
-        raise RuntimeError(f"Datadog fetch failed after 3 attempts: {last_error}") from last_error
+        detail = _error_detail(last_error)
+        raise RuntimeError(f"Datadog fetch failed after 3 attempts: {detail}") from last_error
 
     def _to_record(self, item: dict[str, Any]) -> LogRecord:
         payload = dict(item)
         attributes = item.get("attributes", {})
         if isinstance(attributes, dict):
             payload.update(attributes)
+            nested_attributes = attributes.get("attributes", {})
+            if isinstance(nested_attributes, dict):
+                payload.update(nested_attributes)
         message = str(payload.get("message") or item.get("message") or "")
         timestamp = str(payload.get("timestamp") or item.get("timestamp") or "")
         return LogRecord(timestamp=timestamp, message=message, attributes=payload, source="datadog")
+
+
+def _error_detail(error: Exception | None) -> str:
+    if isinstance(error, httpx.HTTPStatusError) and error.response is not None:
+        try:
+            payload = error.response.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            errors = payload.get("errors")
+            if isinstance(errors, list) and errors:
+                return f"{error}; API errors: {', '.join(str(item) for item in errors)}"
+        text = error.response.text.strip()
+        if text:
+            return f"{error}; response body: {text}"
+    return str(error)

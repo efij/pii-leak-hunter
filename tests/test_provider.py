@@ -52,14 +52,20 @@ def test_coralogix_provider_retries_and_paginates() -> None:
 
 def test_datadog_provider_uses_logs_list_api() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/logs-queries/list"
+        assert request.url.path == "/api/v2/logs/events/search"
         body = request.read().decode("utf-8")
-        assert "service:mailer" in body
+        assert '"query":"service:mailer"' in body or '"query": "service:mailer"' in body
         return httpx.Response(
             200,
             json={
-                "logs": [
-                    {"message": "api_key=sk_live_FAKESECRET123 email=owner@example.test", "timestamp": "2026-03-18T00:00:00Z"}
+                "data": [
+                    {
+                        "attributes": {
+                            "message": "api_key=sk_live_FAKESECRET123 email=owner@example.test",
+                            "timestamp": "2026-03-18T00:00:00Z",
+                            "attributes": {"service": "mailer-service"},
+                        }
+                    }
                 ]
             },
         )
@@ -77,6 +83,40 @@ def test_datadog_provider_uses_logs_list_api() -> None:
     records = provider.fetch(query="service:mailer", start="-1h", end="now")
     assert len(records) == 1
     assert records[0].source == "datadog"
+    assert records[0].attributes["service"] == "mailer-service"
+
+
+def test_datadog_provider_omits_query_for_all_logs_mode() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode("utf-8")
+        assert "/api/v2/logs/events/search" in str(request.url)
+        assert '"query"' not in body
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "attributes": {
+                            "message": "token=abc",
+                            "timestamp": "2026-03-18T00:00:00Z",
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = DatadogProvider(
+        DatadogConfig(
+            api_key="api",
+            app_key="app",
+            site="datadoghq.com",
+            base_url="https://api.datadoghq.com",
+        ),
+        client=client,
+    )
+    records = provider.fetch(query="*", start="-24h", end="now")
+    assert len(records) == 1
 
 
 def test_dynatrace_provider_uses_next_page_key() -> None:
