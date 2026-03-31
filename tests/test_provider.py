@@ -1,3 +1,6 @@
+import json
+from datetime import timedelta
+
 import httpx
 
 from pii_leak_hunter.providers.coralogix import CoralogixProvider
@@ -108,6 +111,45 @@ def test_coralogix_provider_falls_back_to_archive_for_long_windows() -> None:
     assert calls["count"] == 2
     assert len(provider.last_fetch_details["attempts"]) == 2
     assert provider.last_fetch_details["tier"] == "TIER_ARCHIVE"
+
+
+def test_coralogix_provider_splits_full_windows_when_limit_is_hit() -> None:
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        payload = json.loads(request.read().decode("utf-8"))
+        if calls["count"] == 1:
+            assert payload["query"] == "source logs | limit 2"
+            return httpx.Response(
+                200,
+                text='{"result":{"results":[{"userData":"{\\"message\\": \\"full-window-a\\"}"},{"userData":"{\\"message\\": \\"full-window-b\\"}"}]}}',
+            )
+        if calls["count"] == 2:
+            return httpx.Response(
+                200,
+                text='{"result":{"results":[{"userData":"{\\"message\\": \\"left-half\\"}","metadata":[{"key":"timestamp","value":"2026-03-18T00:00:00Z"}]}]}}',
+            )
+        return httpx.Response(
+            200,
+            text='{"result":{"results":[{"userData":"{\\"message\\": \\"right-half\\"}","metadata":[{"key":"timestamp","value":"2026-03-18T01:00:00Z"}]}]}}',
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
+    provider = CoralogixProvider(
+        CoralogixConfig(api_key="token", region="us1", base_url="https://api.us1.coralogix.com"),
+        client=client,
+        page_size=2,
+        min_window=timedelta(minutes=1),
+    )
+
+    records = provider.fetch(query="source logs", start="-2h", end="now")
+
+    assert calls["count"] == 3
+    assert len(records) == 2
+    assert {record.message for record in records} == {"left-half", "right-half"}
+    assert provider.last_fetch_details["window_count"] == 3
+    assert len(provider.last_fetch_details["attempts"]) == 3
 
 
 def test_datadog_provider_uses_logs_list_api() -> None:

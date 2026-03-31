@@ -160,6 +160,7 @@ That default remote flow means:
 - the engine hunts for secrets, PII, masking failures, and risky combinations across whatever logs are returned
 - Coralogix uses a `source logs` DataPrime query by default so “scan everything” does not rely on Lucene wildcard behavior
 - For longer Coralogix windows, the scanner automatically retries archive search when frequent search comes back empty
+- When a Coralogix chunk hits the batch cap, the scanner splits the time range and keeps going instead of stopping at the first full batch
 
 Run scan with another provider without knowing its query language:
 

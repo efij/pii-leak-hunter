@@ -21,33 +21,50 @@ class CoralogixProvider(BaseProvider):
         self,
         config: CoralogixConfig,
         client: httpx.Client | None = None,
-        page_size: int = 500,
+        page_size: int = 5000,
+        min_window: timedelta = timedelta(minutes=15),
     ) -> None:
         super().__init__()
         self.config = config
         self.client = client or httpx.Client(timeout=10.0)
         self.page_size = page_size
+        self.min_window = min_window
 
     def fetch(self, query: str, start: str, end: str) -> list[LogRecord]:
+        now = datetime.now(timezone.utc)
+        start_dt, end_dt = _resolve_time_window(start, end, now=now)
+        normalized_query = query.strip()
+        query_syntax = "QUERY_SYNTAX_DATAPRIME" if self._looks_like_dataprime_query(normalized_query) else "QUERY_SYNTAX_LUCENE"
+        has_explicit_limit = query_syntax == "QUERY_SYNTAX_DATAPRIME" and "| limit " in normalized_query.lower()
         attempts: list[dict[str, Any]] = []
 
-        primary_payload = self._build_payload(query=query, start=start, end=end, tier="TIER_FREQUENT_SEARCH")
-        primary_items = self._request_with_retries(primary_payload)
-        primary_records = [self._to_record(item) for item in primary_items]
-        attempts.append(self._build_attempt_details(primary_payload, primary_items, primary_records))
+        primary_records = self._fetch_window_records(
+            query=normalized_query,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            tier="TIER_FREQUENT_SEARCH",
+            query_syntax=query_syntax,
+            has_explicit_limit=has_explicit_limit,
+            attempts=attempts,
+        )
 
         records = list(primary_records)
-        if not records and _should_try_archive(start, end):
-            archive_payload = self._build_payload(query=query, start=start, end=end, tier="TIER_ARCHIVE")
-            archive_items = self._request_with_retries(archive_payload)
-            archive_records = [self._to_record(item) for item in archive_items]
-            attempts.append(self._build_attempt_details(archive_payload, archive_items, archive_records))
+        if not records and _should_try_archive(start_dt, end_dt):
+            archive_records = self._fetch_window_records(
+                query=normalized_query,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                tier="TIER_ARCHIVE",
+                query_syntax=query_syntax,
+                has_explicit_limit=has_explicit_limit,
+                attempts=attempts,
+            )
             records = archive_records
 
         final_attempt = attempts[-1]
         self.last_fetch_details = {
             "endpoint": self._build_url(),
-            "requested_query": query,
+            "requested_query": normalized_query,
             "effective_query": final_attempt["effective_query"],
             "query_syntax": final_attempt["query_syntax"],
             "tier": final_attempt["tier"],
@@ -55,8 +72,65 @@ class CoralogixProvider(BaseProvider):
             "to": final_attempt["to"],
             "raw_rows_received": final_attempt["raw_rows_received"],
             "records_parsed": final_attempt["records_parsed"],
+            "window_count": len({(attempt["from"], attempt["to"], attempt["tier"]) for attempt in attempts}),
             "attempts": attempts,
         }
+        return records
+
+    def _fetch_window_records(
+        self,
+        *,
+        query: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        tier: str,
+        query_syntax: str,
+        has_explicit_limit: bool,
+        attempts: list[dict[str, Any]],
+        depth: int = 0,
+    ) -> list[LogRecord]:
+        payload = self._build_payload(
+            query=query,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            tier=tier,
+            query_syntax=query_syntax,
+            has_explicit_limit=has_explicit_limit,
+        )
+        items = self._request_with_retries(payload)
+        records = [self._to_record(item) for item in items]
+        attempts.append(self._build_attempt_details(payload, items, records, depth=depth))
+
+        if (
+            query_syntax == "QUERY_SYNTAX_DATAPRIME"
+            and not has_explicit_limit
+            and len(records) >= self.page_size
+            and (end_dt - start_dt) > self.min_window
+        ):
+            midpoint = start_dt + (end_dt - start_dt) / 2
+            left_end = midpoint
+            right_start = midpoint + timedelta(milliseconds=1)
+            left_records = self._fetch_window_records(
+                query=query,
+                start_dt=start_dt,
+                end_dt=left_end,
+                tier=tier,
+                query_syntax=query_syntax,
+                has_explicit_limit=has_explicit_limit,
+                attempts=attempts,
+                depth=depth + 1,
+            )
+            right_records = self._fetch_window_records(
+                query=query,
+                start_dt=right_start,
+                end_dt=end_dt,
+                tier=tier,
+                query_syntax=query_syntax,
+                has_explicit_limit=has_explicit_limit,
+                attempts=attempts,
+                depth=depth + 1,
+            )
+            return _dedupe_records(left_records + right_records)
         return records
 
     def _request_with_retries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -212,19 +286,27 @@ class CoralogixProvider(BaseProvider):
     def _build_url(self) -> str:
         return f"{self.config.base_url}/api/v1/dataprime/query"
 
-    def _build_payload(self, *, query: str, start: str, end: str, tier: str) -> dict[str, Any]:
+    def _build_payload(
+        self,
+        *,
+        query: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        tier: str,
+        query_syntax: str,
+        has_explicit_limit: bool,
+    ) -> dict[str, Any]:
         normalized_query = query.strip()
         metadata = {
             "tier": tier,
-            "startDate": _to_coralogix_time(start),
-            "endDate": _to_coralogix_time(end),
+            "startDate": _format_datetime(start_dt),
+            "endDate": _format_datetime(end_dt),
             "defaultSource": "logs",
         }
-        if self._looks_like_dataprime_query(normalized_query):
-            metadata["syntax"] = "QUERY_SYNTAX_DATAPRIME"
-            final_query = self._ensure_limit(normalized_query)
+        metadata["syntax"] = query_syntax
+        if query_syntax == "QUERY_SYNTAX_DATAPRIME":
+            final_query = normalized_query if has_explicit_limit else self._ensure_limit(normalized_query)
         else:
-            metadata["syntax"] = "QUERY_SYNTAX_LUCENE"
             final_query = normalized_query or "*"
         return {"query": final_query, "metadata": metadata}
 
@@ -252,6 +334,8 @@ class CoralogixProvider(BaseProvider):
         payload: dict[str, Any],
         items: list[dict[str, Any]],
         records: list[LogRecord],
+        *,
+        depth: int,
     ) -> dict[str, Any]:
         return {
             "effective_query": payload["query"],
@@ -261,14 +345,15 @@ class CoralogixProvider(BaseProvider):
             "to": payload["metadata"]["endDate"],
             "raw_rows_received": len(items),
             "records_parsed": len(records),
+            "depth": depth,
         }
 
 
-def _to_coralogix_time(value: str) -> str:
+def _to_coralogix_time(value: str, *, now: datetime | None = None) -> str:
     normalized = value.strip()
-    now = datetime.now(timezone.utc)
+    reference_now = now or datetime.now(timezone.utc)
     if not normalized or normalized.lower() == "now":
-        return _format_datetime(now)
+        return _format_datetime(reference_now)
 
     match = _RELATIVE_TIME_RE.match(normalized)
     if match:
@@ -279,7 +364,7 @@ def _to_coralogix_time(value: str) -> str:
             "d": timedelta(days=int(amount)),
             "w": timedelta(weeks=int(amount)),
         }[unit]
-        return _format_datetime(now - delta)
+        return _format_datetime(reference_now - delta)
 
     iso_value = normalized[:-1] + "+00:00" if normalized.endswith("Z") else normalized
     try:
@@ -309,17 +394,34 @@ def _extract_field_from_pairs(pairs: list[Any], candidate_keys: set[str]) -> str
     return None
 
 
-def _should_try_archive(start: str, end: str) -> bool:
-    if end.strip().lower() not in {"", "now"}:
-        return True
-    match = _RELATIVE_TIME_RE.match(start.strip())
-    if not match:
-        return True
-    amount, unit = match.groups()
-    hours = {
-        "m": int(amount) / 60,
-        "h": int(amount),
-        "d": int(amount) * 24,
-        "w": int(amount) * 24 * 7,
-    }[unit]
-    return hours >= 168
+def _should_try_archive(start_dt: datetime, end_dt: datetime) -> bool:
+    return (end_dt - start_dt) >= timedelta(days=7)
+
+
+def _resolve_time_window(start: str, end: str, *, now: datetime) -> tuple[datetime, datetime]:
+    start_dt = _parse_time_value(start, now=now)
+    end_dt = _parse_time_value(end, now=now)
+    if end_dt <= start_dt:
+        raise ValueError("Coralogix scan window end must be after the start time.")
+    return start_dt, end_dt
+
+
+def _parse_time_value(value: str, *, now: datetime) -> datetime:
+    normalized = _to_coralogix_time(value, now=now)
+    iso_value = normalized[:-1] + "+00:00" if normalized.endswith("Z") else normalized
+    parsed = datetime.fromisoformat(iso_value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _dedupe_records(records: list[LogRecord]) -> list[LogRecord]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[LogRecord] = []
+    for record in records:
+        key = (record.timestamp, record.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(record)
+    return deduped

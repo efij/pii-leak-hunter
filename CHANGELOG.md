@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [5.0.6] - 2026-03-31
+
+### Fixed
+- Coralogix no longer stops after a single limit-sized batch for broad DataPrime scans. The provider now splits time windows when a chunk hits the record cap and aggregates the child windows.
+- Default Coralogix batch size was raised from `500` to `5000`, which reduces under-sampling before adaptive splitting kicks in.
+- Coralogix provider diagnostics now include the number of scanned windows so wide lookbacks are easier to reason about in the CLI and Streamlit UI.
+
 ## [5.0.5] - 2026-03-31
 
 ### Fixed
