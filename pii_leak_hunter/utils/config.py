@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 from dataclasses import dataclass
 
 
@@ -21,7 +22,9 @@ class CoralogixConfig:
         if not api_key:
             raise ConfigurationError("CORALOGIX_API_KEY is required for Coralogix scans.")
         if not region:
-            raise ConfigurationError("CORALOGIX_REGION is required for Coralogix scans.")
+            raise ConfigurationError(
+                "CORALOGIX_REGION is required for Coralogix scans. Use a region like us1/eu1 or paste your Coralogix app/API host."
+            )
         base_url = _build_base_url(region)
         return cls(api_key=api_key, region=region, base_url=base_url)
 
@@ -122,11 +125,51 @@ class NotionConfig:
 
 
 def _build_base_url(region: str) -> str:
-    if region.startswith("http://") or region.startswith("https://"):
-        return region.rstrip("/")
-    if "." in region:
-        return f"https://{region.rstrip('/')}"
-    return f"https://api.{region}.coralogix.com"
+    normalized = region.strip().rstrip("/")
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        normalized = urlparse(normalized).netloc or normalized
+    normalized = normalized.lower()
+
+    hostname_mapping = {
+        "app.coralogix.us": "api.us1.coralogix.com",
+        "app.cx498.coralogix.com": "api.us2.coralogix.com",
+        "coralogix.com": "api.eu1.coralogix.com",
+        "app.eu2.coralogix.com": "api.eu2.coralogix.com",
+        "app.coralogix.in": "api.ap1.coralogix.com",
+        "app.coralogixsg.com": "api.ap2.coralogix.com",
+        "app.ap3.coralogix.com": "api.ap3.coralogix.com",
+    }
+    for suffix, api_host in hostname_mapping.items():
+        if normalized == suffix or normalized.endswith(f".{suffix}"):
+            return f"https://{api_host}"
+    region_mapping = {
+        "us1": "https://api.us1.coralogix.com",
+        "us2": "https://api.us2.coralogix.com",
+        "eu1": "https://api.eu1.coralogix.com",
+        "eu2": "https://api.eu2.coralogix.com",
+        "ap1": "https://api.ap1.coralogix.com",
+        "ap2": "https://api.ap2.coralogix.com",
+        "ap3": "https://api.ap3.coralogix.com",
+        "us1.coralogix.com": "https://api.us1.coralogix.com",
+        "us2.coralogix.com": "https://api.us2.coralogix.com",
+        "eu1.coralogix.com": "https://api.eu1.coralogix.com",
+        "eu2.coralogix.com": "https://api.eu2.coralogix.com",
+        "ap1.coralogix.com": "https://api.ap1.coralogix.com",
+        "ap2.coralogix.com": "https://api.ap2.coralogix.com",
+        "ap3.coralogix.com": "https://api.ap3.coralogix.com",
+        "api.us1.coralogix.com": "https://api.us1.coralogix.com",
+        "api.us2.coralogix.com": "https://api.us2.coralogix.com",
+        "api.eu1.coralogix.com": "https://api.eu1.coralogix.com",
+        "api.eu2.coralogix.com": "https://api.eu2.coralogix.com",
+        "api.ap1.coralogix.com": "https://api.ap1.coralogix.com",
+        "api.ap2.coralogix.com": "https://api.ap2.coralogix.com",
+        "api.ap3.coralogix.com": "https://api.ap3.coralogix.com",
+    }
+    if normalized in region_mapping:
+        return region_mapping[normalized]
+    if "." in normalized:
+        return f"https://{normalized}"
+    return f"https://api.{normalized}.coralogix.com"
 
 
 def _build_datadog_url(site: str) -> str:

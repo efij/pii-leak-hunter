@@ -234,7 +234,8 @@ def _render_provider_credentials(provider_name: str) -> None:
     provider = normalize_provider_name(provider_name)
     if provider == "coralogix":
         _secret_input("CORALOGIX_API_KEY", "API key", prefix="provider")
-        _text_input("CORALOGIX_REGION", "Region", prefix="provider", default="eu1")
+        _text_input("CORALOGIX_REGION", "Region, app host, or API host", prefix="provider", default="")
+        st.caption("Examples: `us1`, `api.us1.coralogix.com`, or `https://tipalti-us.app.coralogix.us`.")
     elif provider == "datadog":
         _secret_input("DATADOG_API_KEY", "API key", prefix="provider")
         _secret_input("DATADOG_APP_KEY", "Application key", prefix="provider")

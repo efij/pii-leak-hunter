@@ -11,29 +11,29 @@ from pii_leak_hunter.utils.config import (
     DynatraceConfig,
     NewRelicConfig,
     SplunkConfig,
+    _build_base_url,
 )
 
 
-def test_coralogix_provider_retries_and_paginates() -> None:
+def test_coralogix_provider_uses_dataprime_query_endpoint() -> None:
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         attempts["count"] += 1
+        assert request.url.path == "/api/v1/dataprime/query"
+        body = request.read().decode("utf-8")
+        assert '"syntax":"QUERY_SYNTAX_LUCENE"' in body or '"syntax": "QUERY_SYNTAX_LUCENE"' in body
+        assert '"query":"source:api"' in body or '"query": "source:api"' in body
         if attempts["count"] == 1:
             return httpx.Response(429, json={"message": "rate limited"})
-        if attempts["count"] == 2:
-            return httpx.Response(
-                200,
-                json={
-                    "records": [{"timestamp": "2026-03-18T00:00:00Z", "message": "alice@example.test"}],
-                    "nextPageToken": "page-2",
-                },
-            )
         return httpx.Response(
             200,
-            json={
-                "records": [{"timestamp": "2026-03-18T00:01:00Z", "message": "done"}],
-            },
+            text="\n".join(
+                [
+                    '{"result":{"timestamp":"2026-03-18T00:00:00Z","message":"alice@example.test"}}',
+                    '{"result":{"timestamp":"2026-03-18T00:01:00Z","message":"done"}}',
+                ]
+            ),
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler), timeout=10.0)
@@ -45,9 +45,14 @@ def test_coralogix_provider_retries_and_paginates() -> None:
 
     records = provider.fetch(query="source:api", start="-1h", end="now")
 
-    assert attempts["count"] == 3
+    assert attempts["count"] == 2
     assert len(records) == 2
     assert records[0].source == "coralogix"
+
+
+def test_coralogix_region_builder_accepts_app_hosts() -> None:
+    assert _build_base_url("https://tipalti-us.app.coralogix.us") == "https://api.us1.coralogix.com"
+    assert _build_base_url("tipalti-us.app.coralogix.us") == "https://api.us1.coralogix.com"
 
 
 def test_datadog_provider_uses_logs_list_api() -> None:

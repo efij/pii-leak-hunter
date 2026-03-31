@@ -118,8 +118,10 @@ Set your Coralogix credentials:
 
 ```bash
 export CORALOGIX_API_KEY=your_api_key
-export CORALOGIX_REGION=your_region
+export CORALOGIX_REGION=us1
 ```
+
+`CORALOGIX_REGION` can be either a short region like `us1` or `eu1`, an API host like `api.us1.coralogix.com`, or your full Coralogix app URL like `https://tipalti-us.app.coralogix.us`.
 
 Other supported providers use these environment variables:
 

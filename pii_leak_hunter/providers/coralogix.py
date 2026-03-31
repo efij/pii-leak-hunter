@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
+import re
 import time
-from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -9,6 +11,9 @@ import httpx
 from pii_leak_hunter.core.models import LogRecord
 from pii_leak_hunter.providers.base import BaseProvider
 from pii_leak_hunter.utils.config import CoralogixConfig
+
+
+_RELATIVE_TIME_RE = re.compile(r"^-(\d+)([mhdw])$")
 
 
 class CoralogixProvider(BaseProvider):
@@ -23,35 +28,11 @@ class CoralogixProvider(BaseProvider):
         self.page_size = page_size
 
     def fetch(self, query: str, start: str, end: str) -> list[LogRecord]:
-        records: list[LogRecord] = []
-        for page in self._paginate(query=query, start=start, end=end):
-            for item in page:
-                records.append(self._to_record(item))
-        return records
+        payload = self._build_payload(query=query, start=start, end=end)
+        items = self._request_with_retries(payload)
+        return [self._to_record(item) for item in items]
 
-    def _paginate(self, *, query: str, start: str, end: str) -> Iterator[list[dict[str, Any]]]:
-        next_token: str | None = None
-        for attempt in range(1, 1000):
-            payload = {
-                "query": query,
-                "startTime": start,
-                "endTime": end,
-                "pageSize": self.page_size,
-            }
-            if next_token:
-                payload["nextPageToken"] = next_token
-
-            body = self._request_with_retries(payload)
-            items, next_token = self._extract_items(body)
-            if not items:
-                break
-            yield items
-            if not next_token:
-                break
-            if attempt >= 999:
-                break
-
-    def _request_with_retries(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _request_with_retries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
@@ -67,43 +48,149 @@ class CoralogixProvider(BaseProvider):
                         response=response,
                     )
                 response.raise_for_status()
-                data = response.json()
-                if not isinstance(data, dict):
-                    raise ValueError("Coralogix response must be a JSON object.")
-                return data
+                return self._parse_response(response)
             except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError, ValueError) as exc:
                 last_error = exc
                 if attempt >= 3:
                     break
                 time.sleep(0.2 * attempt)
-        raise RuntimeError(f"Coralogix fetch failed after 3 attempts: {last_error}") from last_error
+        raise RuntimeError(f"Coralogix fetch failed after 3 attempts: {self._format_error(last_error)}") from last_error
 
-    def _extract_items(self, body: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
-        for key in ("records", "results", "data", "logs"):
-            value = body.get(key)
-            if isinstance(value, list):
-                next_token = body.get("nextPageToken") or body.get("next_page_token")
-                return [item for item in value if isinstance(item, dict)], next_token
+    def _parse_response(self, response: httpx.Response) -> list[dict[str, Any]]:
+        text = response.text.strip()
+        if not text:
+            return []
 
-        if isinstance(body.get("data"), dict):
-            data = body["data"]
-            for key in ("records", "results", "logs"):
-                value = data.get(key)
-                if isinstance(value, list):
-                    next_token = data.get("nextPageToken") or data.get("next_page_token")
-                    return [item for item in value if isinstance(item, dict)], next_token
-        return [], None
+        parsed_lines: list[dict[str, Any]] = []
+        try:
+            body = response.json()
+        except json.JSONDecodeError:
+            body = None
+        if body is not None:
+            parsed_lines.extend(self._collect_records(body))
+        else:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    entry = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                parsed_lines.extend(self._collect_records(entry))
+        return parsed_lines
+
+    def _collect_records(self, payload: Any) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        self._walk_payload(payload, records)
+        return records
+
+    def _walk_payload(self, payload: Any, records: list[dict[str, Any]]) -> None:
+        if isinstance(payload, list):
+            for item in payload:
+                self._walk_payload(item, records)
+            return
+        if not isinstance(payload, dict):
+            return
+
+        if any(key in payload for key in ("message", "text", "log", "_raw", "body", "content")):
+            records.append(payload)
+            return
+        if any(key in payload for key in ("timestamp", "@timestamp", "time", "_time")) and payload:
+            records.append(payload)
+            return
+
+        for key in ("result", "results", "records", "logs", "data", "userData", "record", "items", "hits"):
+            if key in payload:
+                self._walk_payload(payload[key], records)
 
     def _to_record(self, item: dict[str, Any]) -> LogRecord:
-        timestamp = str(item.get("timestamp") or item.get("@timestamp") or item.get("time") or "")
-        message = str(item.get("message") or item.get("text") or item.get("log") or "")
+        timestamp = str(item.get("timestamp") or item.get("@timestamp") or item.get("time") or item.get("_time") or "")
+        message = str(
+            item.get("message")
+            or item.get("text")
+            or item.get("log")
+            or item.get("_raw")
+            or item.get("body")
+            or item.get("content")
+            or json.dumps(item, sort_keys=True)
+        )
         return LogRecord(timestamp=timestamp, message=message, attributes=item, source="coralogix")
 
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/x-ndjson, application/json",
         }
 
     def _build_url(self) -> str:
-        return f"{self.config.base_url}/api/v1/logs/search"
+        return f"{self.config.base_url}/api/v1/dataprime/query"
+
+    def _build_payload(self, *, query: str, start: str, end: str) -> dict[str, Any]:
+        normalized_query = query.strip()
+        metadata = {
+            "tier": "TIER_FREQUENT_SEARCH",
+            "startDate": _to_coralogix_time(start),
+            "endDate": _to_coralogix_time(end),
+            "defaultSource": "logs",
+        }
+        if self._looks_like_dataprime_query(normalized_query):
+            metadata["syntax"] = "QUERY_SYNTAX_DATAPRIME"
+            final_query = self._ensure_limit(normalized_query)
+        else:
+            metadata["syntax"] = "QUERY_SYNTAX_LUCENE"
+            final_query = normalized_query or "*"
+        return {"query": final_query, "metadata": metadata}
+
+    def _ensure_limit(self, query: str) -> str:
+        lowered = query.lower()
+        if "| limit " in lowered:
+            return query
+        return f"{query} | limit {self.page_size}"
+
+    def _looks_like_dataprime_query(self, query: str) -> bool:
+        normalized = query.strip().lower()
+        if normalized in {"", "*"}:
+            return False
+        return "|" in normalized or normalized.startswith("source ")
+
+    def _format_error(self, error: Exception | None) -> str:
+        if isinstance(error, httpx.HTTPStatusError) and error.response is not None:
+            details = error.response.text.strip()
+            if details:
+                return f"{error} | response={details}"
+        return str(error)
+
+
+def _to_coralogix_time(value: str) -> str:
+    normalized = value.strip()
+    now = datetime.now(timezone.utc)
+    if not normalized or normalized.lower() == "now":
+        return _format_datetime(now)
+
+    match = _RELATIVE_TIME_RE.match(normalized)
+    if match:
+        amount, unit = match.groups()
+        delta = {
+            "m": timedelta(minutes=int(amount)),
+            "h": timedelta(hours=int(amount)),
+            "d": timedelta(days=int(amount)),
+            "w": timedelta(weeks=int(amount)),
+        }[unit]
+        return _format_datetime(now - delta)
+
+    iso_value = normalized[:-1] + "+00:00" if normalized.endswith("Z") else normalized
+    try:
+        parsed = datetime.fromisoformat(iso_value)
+    except ValueError:
+        return normalized
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return _format_datetime(parsed)
+
+
+def _format_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
