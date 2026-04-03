@@ -62,11 +62,15 @@ def enrich_finding_context(finding: Finding) -> None:
     tags = sorted({tag for entity_type in entity_types for tag in ENTITY_TAGS.get(entity_type, [])})
     risk_reasons = _risk_reasons(finding.type, entity_types)
     remediation = _remediation_steps(finding.type, entity_types)
-    finding.context.setdefault("exploitability_priority", exploitability_priority(finding))
+    priority = exploitability_priority(finding)
+    score_value = exploitability_score(finding)
     finding.context.setdefault("policy_tags", tags)
     finding.context.setdefault("risk_reasons", risk_reasons)
     finding.context.setdefault("remediation", remediation)
     finding.context.setdefault("blast_radius", _blast_radius(entity_types))
+    finding.context.setdefault("exploitability_priority", priority)
+    finding.context.setdefault("exploitability_score", score_value)
+    finding.context.setdefault("triage_bucket", triage_bucket(score_value))
 
 
 def exploitability_priority(finding: Finding) -> str:
@@ -82,6 +86,47 @@ def exploitability_priority(finding: Finding) -> str:
     if entity_types & {"AWS_SECRET_ARN", "AWS_ROLE_ARN", "AWS_ARN", "KUBERNETES_API_SERVER"}:
         return "P3"
     return "P2" if finding.severity in {"critical", "high"} else "P4"
+
+
+def exploitability_score(finding: Finding) -> int:
+    entity_types = {entity.entity_type for entity in finding.entities}
+    score_value = {
+        "critical": 85,
+        "high": 68,
+        "medium": 48,
+        "low": 25,
+    }.get(finding.severity, 20)
+    score_value += {
+        "credential_bundle": 12,
+        "control_plane_secret": 12,
+        "secret_pii_overlap": 10,
+        "identity_bundle": 8,
+        "masking_failure": 6,
+    }.get(finding.type, 0)
+    if "PRIVATE_KEY_BLOB" in entity_types:
+        score_value += 18
+    if entity_types & {"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "KUBERNETES_BEARER_TOKEN", "AZURE_STORAGE_CONNECTION_STRING"}:
+        score_value += 12
+    if entity_types & {"AWS_ACCESS_KEY_ID", "GCP_API_KEY", "DATADOG_API_KEY", "NEW_RELIC_LICENSE_KEY", "TERRAFORM_CLOUD_TOKEN"}:
+        score_value += 8
+    if entity_types & {"AWS_SECRET_ARN", "AWS_ROLE_ARN", "AWS_ARN", "KUBERNETES_API_SERVER"}:
+        score_value += 3
+    haystack = f"{finding.safe_summary} {' '.join(str(v) for v in finding.context.values())}".lower()
+    if any(word in haystack for word in ("prod", "production", "customer", "payment", "admin", "root", "incident")):
+        score_value += 6
+    return max(0, min(100, score_value))
+
+
+def triage_bucket(score_value: int) -> str:
+    if score_value >= 90:
+        return "immediate"
+    if score_value >= 75:
+        return "urgent"
+    if score_value >= 60:
+        return "high"
+    if score_value >= 40:
+        return "review"
+    return "backlog"
 
 
 def _risk_reasons(finding_type: str, entity_types: set[str]) -> list[str]:

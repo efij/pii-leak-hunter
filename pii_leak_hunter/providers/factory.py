@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pii_leak_hunter.providers.base import BaseProvider
+from pii_leak_hunter.providers.cloudwatch import CloudWatchProvider
 from pii_leak_hunter.providers.coralogix import CoralogixProvider
 from pii_leak_hunter.providers.datadog import DatadogProvider
 from pii_leak_hunter.providers.dynatrace import DynatraceProvider
@@ -8,6 +9,7 @@ from pii_leak_hunter.providers.new_relic import NewRelicProvider
 from pii_leak_hunter.providers.splunk import SplunkProvider
 from pii_leak_hunter.utils.config import (
     CoralogixConfig,
+    CloudWatchConfig,
     DatadogConfig,
     DynatraceConfig,
     NewRelicConfig,
@@ -15,10 +17,11 @@ from pii_leak_hunter.utils.config import (
 )
 
 
-SUPPORTED_PROVIDERS = ("coralogix", "datadog", "dynatrace", "splunk", "newrelic")
+SUPPORTED_PROVIDERS = ("coralogix", "cloudwatch", "datadog", "dynatrace", "splunk", "newrelic")
 DEFAULT_PROVIDER_LOOKBACK = "-24h"
 DEFAULT_PROVIDER_QUERIES = {
     "coralogix": "source logs",
+    "cloudwatch": "*",
     "datadog": "*",
     "dynatrace": "*",
     "splunk": "*",
@@ -26,6 +29,7 @@ DEFAULT_PROVIDER_QUERIES = {
 }
 PROVIDER_QUERY_HINTS = {
     "coralogix": 'Optional: source logs | filter log_obj.applicationName == "your-service"',
+    "cloudwatch": 'Optional: "?ERROR ?Exception" filter pattern',
     "datadog": "Optional: service:mailer-service",
     "dynatrace": 'Optional: contains(content, "mailer-service")',
     "splunk": 'Optional: index=main service="mailer-service"',
@@ -37,6 +41,8 @@ def build_provider(name: str) -> BaseProvider:
     normalized = normalize_provider_name(name)
     if normalized == "coralogix":
         return CoralogixProvider(CoralogixConfig.from_env())
+    if normalized == "cloudwatch":
+        return CloudWatchProvider(CloudWatchConfig.from_env())
     if normalized == "datadog":
         return DatadogProvider(DatadogConfig.from_env())
     if normalized == "dynatrace":

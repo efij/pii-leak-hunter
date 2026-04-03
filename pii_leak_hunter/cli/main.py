@@ -7,6 +7,7 @@ import typer
 from pii_leak_hunter.core.baseline import apply_baseline, write_baseline
 from pii_leak_hunter.core.models import ScanResult
 from pii_leak_hunter.core.pipeline import Pipeline
+from pii_leak_hunter.hunts.recipes import get_recipe, list_recipes
 from pii_leak_hunter.output.evidence_pack import write_evidence_pack
 from pii_leak_hunter.output.csv_writer import write_csv
 from pii_leak_hunter.output.json_writer import write_json
@@ -37,13 +38,15 @@ def scan_file(
     baseline_in: Path | None = typer.Option(None, "--baseline-in"),
     baseline_out: Path | None = typer.Option(None, "--baseline-out"),
     new_only: bool = typer.Option(False, "--new-only"),
+    recipe: str | None = typer.Option(None, "--recipe"),
     fail_on: str | None = typer.Option(None, "--fail-on"),
     unsafe_show_values: bool = typer.Option(False, "--unsafe-show-values"),
 ) -> None:
     """Scan a local log file."""
     try:
+        _validate_recipe(recipe)
         loaded = build_source(str(path)).load()
-        result = Pipeline().run(loaded.records, source=loaded.source, metadata=loaded.metadata)
+        result = Pipeline().run(loaded.records, source=loaded.source, metadata=loaded.metadata, recipe_id=recipe)
         result = _apply_baseline_if_requested(result, baseline_in=baseline_in, new_only=new_only)
         _emit_outputs(
             result,
@@ -88,14 +91,16 @@ def scan(
     baseline_in: Path | None = typer.Option(None, "--baseline-in"),
     baseline_out: Path | None = typer.Option(None, "--baseline-out"),
     new_only: bool = typer.Option(False, "--new-only"),
+    recipe: str | None = typer.Option(None, "--recipe"),
     fail_on: str | None = typer.Option(None, "--fail-on"),
     unsafe_show_values: bool = typer.Option(False, "--unsafe-show-values"),
 ) -> None:
     """Scan logs from a supported remote provider or a URI/path target."""
     try:
+        _validate_recipe(recipe)
         if is_target_source(target):
             loaded = build_source(target).load()
-            result = Pipeline().run(loaded.records, source=loaded.source, metadata=loaded.metadata)
+            result = Pipeline().run(loaded.records, source=loaded.source, metadata=loaded.metadata, recipe_id=recipe)
             result = _apply_baseline_if_requested(result, baseline_in=baseline_in, new_only=new_only)
             _emit_outputs(
                 result,
@@ -132,6 +137,7 @@ def scan(
                 "to": to,
                 "provider_details": provider_details,
             },
+            recipe_id=recipe,
         )
         result = _apply_baseline_if_requested(result, baseline_in=baseline_in, new_only=new_only)
         _emit_outputs(
@@ -179,6 +185,14 @@ def least_privilege(
     if validate:
         info = validate_preset(integration)
         typer.echo(f"Validation status: {info['status']}")
+
+
+@app.command("recipes")
+def recipes() -> None:
+    """List built-in hunt recipes."""
+    for recipe in list_recipes():
+        typer.echo(f"{recipe.recipe_id}: {recipe.title}")
+        typer.echo(f"  {recipe.description}")
 
 
 def _emit_outputs(
@@ -242,3 +256,8 @@ def _apply_baseline_if_requested(
     if baseline_in:
         return apply_baseline(result, str(baseline_in), new_only=new_only)
     return result
+
+
+def _validate_recipe(recipe: str | None) -> None:
+    if recipe and get_recipe(recipe) is None:
+        raise typer.BadParameter("Unknown recipe. Use `pii-leak-hunter recipes` to list built-in recipes.")

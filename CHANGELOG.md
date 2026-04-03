@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [6.2.0] - 2026-04-04
+
+### Added
+- monday.com source support for scanning boards, items, and item updates through the GraphQL API.
+- Microsoft Teams source support for scanning joined-team channels and replies through Microsoft Graph.
+
+### Changed
+- GitHub source coverage now supports owner-wide scans when the repository is left blank, and it now includes PR review comments in addition to issues, pull requests, and issue comments.
+- Azure DevOps source coverage now includes pull request titles, descriptions, and review threads across matching repositories in a project instead of stopping at work items.
+- The Streamlit target builder now presents platform-level labels for Azure DevOps, GitHub, Slack, Google Workspace, Monday, Microsoft Teams, Zendesk, and Snowflake.
+- README guidance now describes the connectors at the platform level while still documenting the exact collaboration surfaces each one scans.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
+## [6.1.0] - 2026-04-04
+
+### Added
+- Slack source support for channel history scanning, with session-only bot token handling in the Streamlit UI and URI-based scanning in the CLI.
+- Google Workspace source support focused on Drive, Docs, and Sheets content via the Drive API, including exported content scanning for native Google file types.
+- Lightweight asset mapping on findings so researchers can immediately see service, project, environment, account, cluster, channel, and table context when present in the source record.
+- Timeline-aware grouped findings in the UI, including first seen, last seen, and cross-source spread hints.
+
+### Changed
+- The Streamlit target builder now includes Slack and Google Workspace forms.
+- Hunt recipes now include Workspace-focused and collaboration-focused flows that cover Slack and Google Workspace.
+- Google Workspace is positioned as a complement to native Google DLP rather than a replacement, so findings can still be correlated across non-Google systems.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
+## [6.0.0] - 2026-04-03
+
+### Added
+- A modular hunt recipe framework with 20 built-in high-signal recipes, optional recipe filtering from the CLI and Streamlit UI, and a simple registry model for adding more recipes cleanly.
+- A visual exposure graph in the Streamlit UI plus graph JSON export, linking sources, records, findings, and repeated entity hashes into a single investigation surface.
+- Stronger exploitability triage with numeric exploitability scores, triage buckets, and a dedicated triage queue in the UI and HTML report.
+- New remote log provider support for AWS CloudWatch Logs.
+- New content and data source adapters for Confluence, Jira, Azure DevOps work items, GitHub issues and PR discussions, Zendesk, and Snowflake SQL API queries.
+
+### Changed
+- The Streamlit target builder now includes dedicated forms for Confluence, Jira, Azure DevOps, GitHub, Zendesk, and Snowflake, while the provider panel now includes CloudWatch configuration.
+- Least-privilege presets now cover the newly added integrations so teams can wire them up without over-scoping access.
+- GitHub scanning is intentionally scoped to issues, pull requests, and comments rather than repository blobs or history, since dedicated tools like gitleaks already own repo secret scanning better.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
 ## [5.0.10] - 2026-03-31
 
 ### Fixed

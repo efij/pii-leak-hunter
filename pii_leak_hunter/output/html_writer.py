@@ -8,6 +8,7 @@ from pii_leak_hunter.ui.presentation import (
     build_diff_summary,
     exploitability_counts,
     group_findings,
+    top_triage_rows,
     top_entity_families,
 )
 
@@ -23,6 +24,7 @@ def write_html_report(
     severity_counts = result.severity_counts()
     exploitability = exploitability_counts(result.findings)
     top_entities = top_entity_families(result.findings)
+    triage_rows = top_triage_rows(result.findings)
     cards = "".join(
         _metric_card(label, count, tone)
         for label, count, tone in (
@@ -108,6 +110,10 @@ def write_html_report(
         f"<li><span>{escape(entity)}</span><strong>{count}</strong></li>"
         for entity, count in top_entities
     ) or "<li><span>None</span><strong>0</strong></li>"
+    triage_markup = "".join(
+        f"<li><span>{escape(str(row['priority']))} / {escape(str(row['bucket']))}</span><strong>{escape(str(row['summary']))[:120]}</strong></li>"
+        for row in triage_rows[:8]
+    ) or "<li><span>P4 / backlog</span><strong>No findings</strong></li>"
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -371,9 +377,15 @@ def write_html_report(
       </div>
       <div class="two-col" style="margin-top: 18px;">
         <div>
+          <h3>Triage Queue</h3>
+          <ul class="ladder">{triage_markup}</ul>
+        </div>
+        <div>
           <h3>Source Metadata</h3>
           <ul class="meta-list">{metadata_lines or '<li><strong>metadata</strong><span>none</span></li>'}</ul>
         </div>
+      </div>
+      <div class="two-col" style="margin-top: 18px;">
         <div>
           <h3>Report Guarantees</h3>
           <ul class="meta-list">

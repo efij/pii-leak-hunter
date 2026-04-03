@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pii_leak_hunter.analysis.context import enrich_operational_context
 from pii_leak_hunter.core.models import Finding, LogRecord
 from pii_leak_hunter.core.normalizer import Normalizer
 from pii_leak_hunter.correlation.correlator import Correlator
@@ -22,4 +23,5 @@ class Scanner:
         for finding in findings:
             finding.severity = score(finding)
             enrich_finding_context(finding)
+            enrich_operational_context(record, finding)
         return findings

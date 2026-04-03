@@ -4,11 +4,13 @@ from datetime import timedelta
 import httpx
 
 from pii_leak_hunter.providers.coralogix import CoralogixProvider
+from pii_leak_hunter.providers.cloudwatch import CloudWatchProvider
 from pii_leak_hunter.providers.datadog import DatadogProvider
 from pii_leak_hunter.providers.dynatrace import DynatraceProvider
 from pii_leak_hunter.providers.new_relic import NewRelicProvider
 from pii_leak_hunter.providers.splunk import SplunkProvider
 from pii_leak_hunter.utils.config import (
+    CloudWatchConfig,
     CoralogixConfig,
     DatadogConfig,
     DynatraceConfig,
@@ -16,6 +18,35 @@ from pii_leak_hunter.utils.config import (
     SplunkConfig,
     _build_base_url,
 )
+
+
+def test_cloudwatch_provider_scans_multiple_log_groups() -> None:
+    class FakeLogsClient:
+        def describe_log_groups(self, **kwargs):
+            assert kwargs["logGroupNamePrefix"] == "/aws/lambda/"
+            return {"logGroups": [{"logGroupName": "/aws/lambda/app-a"}, {"logGroupName": "/aws/lambda/app-b"}]}
+
+        def filter_log_events(self, **kwargs):
+            return {
+                "events": [
+                    {
+                        "timestamp": 1710806400000,
+                        "message": f"email=user@example.invalid from {kwargs['logGroupName']}",
+                        "eventId": f"evt-{kwargs['logGroupName']}",
+                    }
+                ]
+            }
+
+    provider = CloudWatchProvider(
+        CloudWatchConfig(region="eu-central-1", log_group_prefix="/aws/lambda/", max_log_groups=10),
+        client=FakeLogsClient(),
+    )
+
+    records = provider.fetch(query="*", start="-24h", end="now")
+
+    assert len(records) == 2
+    assert provider.last_fetch_details["log_groups_scanned"] == 2
+    assert {record.attributes["log_group"] for record in records} == {"/aws/lambda/app-a", "/aws/lambda/app-b"}
 
 
 def test_coralogix_provider_uses_dataprime_query_endpoint() -> None:

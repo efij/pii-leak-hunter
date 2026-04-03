@@ -40,6 +40,16 @@ PRESETS: dict[str, LeastPrivilegePreset] = {
         required_scopes=["channels:history", "groups:history", "im:history", "mpim:history"],
         notes=["Restrict channel membership to the minimum set needed for scanning."],
     ),
+    "googleworkspace": LeastPrivilegePreset(
+        integration="googleworkspace",
+        title="Google Workspace read access",
+        minimum_access="Read-only OAuth token scoped to Drive metadata and file content export for approved items.",
+        required_scopes=["https://www.googleapis.com/auth/drive.readonly"],
+        notes=[
+            "Start with Drive and Docs/Sheets export access only.",
+            "Avoid Gmail or admin-wide scopes unless those surfaces are explicitly in scope.",
+        ],
+    ),
     "jira": LeastPrivilegePreset(
         integration="jira",
         title="Jira browse-only project access",
@@ -47,10 +57,24 @@ PRESETS: dict[str, LeastPrivilegePreset] = {
         required_scopes=["Browse Projects", "View Development Tools if comments link code artifacts"],
         notes=["Do not grant project admin or write permissions."],
     ),
+    "confluence": LeastPrivilegePreset(
+        integration="confluence",
+        title="Confluence page-read access",
+        minimum_access="Service account with read-only access to the spaces being scanned.",
+        required_scopes=["read:confluence-content.summary", "read:confluence-content.all when page body retrieval is needed"],
+        notes=["Scope the integration to the minimum set of spaces and avoid write permissions."],
+    ),
+    "azuredevops": LeastPrivilegePreset(
+        integration="azuredevops",
+        title="Azure DevOps read-only project access",
+        minimum_access="PAT limited to work item, repository, and pull request read APIs in the target organization/project.",
+        required_scopes=["Work Items Read", "Code Read", "Project and Team Read"],
+        notes=["Avoid build, release, or write scopes unless those artifacts are explicitly in scope."],
+    ),
     "github": LeastPrivilegePreset(
         integration="github",
         title="GitHub read-only app or token",
-        minimum_access="GitHub App or token with metadata and read-only issues/discussions access.",
+        minimum_access="GitHub App or token with metadata and read-only issues and pull request discussion access.",
         required_scopes=["metadata:read", "issues:read", "pull_requests:read", "contents:read"],
         notes=["Avoid broad classic PATs when a GitHub App can scope access tighter."],
     ),
@@ -81,6 +105,27 @@ PRESETS: dict[str, LeastPrivilegePreset] = {
         minimum_access="App registration with the narrowest Microsoft Graph channel/chat read permissions approved by the tenant.",
         required_scopes=["ChannelMessage.Read.All", "Chat.Read.All when chat scanning is needed"],
         notes=["Prefer channel-only access if chat scanning is out of scope."],
+    ),
+    "zendesk": LeastPrivilegePreset(
+        integration="zendesk",
+        title="Zendesk ticket read access",
+        minimum_access="Read-only API token or OAuth client scoped to search tickets and comments.",
+        required_scopes=["tickets:read", "users:read if requester context is needed"],
+        notes=["Do not grant write/admin support scopes to the scanning identity."],
+    ),
+    "snowflake": LeastPrivilegePreset(
+        integration="snowflake",
+        title="Snowflake query read-only access",
+        minimum_access="Programmatic access token or role limited to SELECT on in-scope schemas/tables.",
+        required_scopes=["USAGE on warehouse/database/schema", "SELECT on target tables/views"],
+        notes=["Avoid ACCOUNTADMIN and prefer a dedicated read-only role for scanning statements."],
+    ),
+    "cloudwatch": LeastPrivilegePreset(
+        integration="cloudwatch",
+        title="CloudWatch Logs read access",
+        minimum_access="IAM role or user limited to CloudWatch Logs read APIs for approved log groups.",
+        required_scopes=["logs:DescribeLogGroups", "logs:FilterLogEvents"],
+        notes=["Prefer log-group prefixes or explicit group lists over account-wide access."],
     ),
 }
 

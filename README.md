@@ -9,9 +9,9 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - Detect PII, cloud secrets, infra secrets, and composite exposures.
 - Correlate higher-risk scenarios like credential bundles, masking failures, secret+PII overlap, and control-plane leaks.
 - Scan local files, compressed archives, databases, object storage, log platforms, and selected SaaS sources.
-- Triage findings in a polished Streamlit web console with in-session provider config, target builders, scan progress, grouped findings, and baseline diff.
+- Triage findings in a polished Streamlit web console with in-session provider config, target builders, scan progress, grouped findings, baseline diff, a visual exposure graph, and asset-aware context.
 - Export safe HTML audit reports, SARIF, and evidence packs for triage, PRs, and security reviews.
-- Track least-privilege guidance and use baseline/diff mode to focus on new leaks.
+- Track least-privilege guidance, exploitability scores, built-in hunt recipes, and first/last-seen spread to focus on the leaks that matter first.
 
 ---
 
@@ -26,7 +26,10 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - **Presidio-powered detection + custom recognizers**
 - **Safe previews by default** (no raw sensitive data exposed)
 - **CLI for automation, CI/CD, and scripting**
-- **Streamlit web console** for source selection, credential entry, progress tracking, triage, and baseline comparison
+- **Streamlit web console** for source selection, credential entry, progress tracking, triage, baseline comparison, and visual exposure graphing
+- **Exploitability triage** with priority, score, and triage bucket
+- **Hunt recipes** with 20 built-in, modular high-signal workflows for researchers
+- **Asset mapping + timeline context** so grouped findings show service/project/env hints and when the leak first or last appeared
 - **Static HTML audit report** with masked evidence, exploitability ladder, and print-friendly layout
 - Output formats:
   - JSON
@@ -50,17 +53,26 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 
 ### Current
 - **Coralogix** (v1)
+- **AWS CloudWatch Logs**
 - **Datadog**
 - **Dynatrace**
 - **Splunk**
 - **New Relic**
 - **ServiceNow**
 - **Notion**
+- **Confluence**
+- **Jira**
+- **Azure DevOps**
+- **GitHub**
+- **Slack**
+- **Google Workspace**
+- **Monday**
+- **Microsoft Teams**
+- **Zendesk**
+- **Snowflake**
 
 ### Coming soon
-- Additional provider tuning and provider-specific query helpers  
-- monday.com
-- Microsoft Teams
+- Additional provider tuning and provider-specific query helpers
 - Intercom
 
 ---
@@ -84,6 +96,7 @@ PII Leak Hunter is:
 - **DSPM-adjacent** (logs are a real data surface)
 - **Compliance-supportive** (PCI DSS, GDPR, SOC 2, HIPAA, ISO 27001)
 - **Provider-agnostic** (Coralogix-first, multi-provider roadmap)
+- **Researcher-friendly** (triage-first, graph-first, workflow-aware)
 
 ---
 
@@ -169,6 +182,28 @@ Run scan with another provider without knowing its query language:
 pii-leak-hunter scan --provider datadog
 ```
 
+Run a high-signal recipe instead of sifting through every finding manually:
+
+```bash
+pii-leak-hunter scan --provider cloudwatch --recipe prod-credentials
+pii-leak-hunter scan github://owner --recipe dev-collaboration
+pii-leak-hunter scan slack://workspace?channel_query=incident --recipe incident-war-room
+pii-leak-hunter scan googleworkspace://drive --recipe workspace-doc-leaks
+pii-leak-hunter recipes
+```
+
+The built-in recipes are modular and live in `pii_leak_hunter/hunts/recipes.py`, so adding a new hunt is a small registry change rather than a CLI rewrite.
+
+### 4. Provider and source guidance
+
+- CloudWatch is implemented as a log provider because it behaves like a log backend and fits the existing remote scan path.
+- Slack, Google Workspace, Confluence, Jira, Azure DevOps, GitHub, Monday, Microsoft Teams, Zendesk, ServiceNow, and Notion are implemented as sources because they expose messages, documents, tickets, pages, work items, and collaboration threads rather than time-windowed log streams.
+- Snowflake is implemented as a read-only source using the SQL API. It scans explicit statements or table queries, which keeps access narrow and predictable.
+- GitHub scanning focuses on issues, pull requests, issue comments, and PR review comments. Leave the repository blank to scan all visible repos under an owner. Repository blob and history scanning are still better handled by dedicated tools like gitleaks.
+- Azure DevOps scanning covers work items plus pull request titles, descriptions, and review threads across the matching repos in a project.
+- Google Workspace support intentionally starts with Drive, Docs, and Sheets content. This complements Google DLP by bringing Workspace findings into the same triage, graph, and cross-source correlation flow as your other systems.
+- Monday and Microsoft Teams support focus on the collaboration surface where researchers actually find pasted secrets: boards, item updates, channel messages, and replies.
+
 If you do want to narrow the scope, the provider filter is still available:
 
 ```bash
@@ -185,6 +220,10 @@ pii-leak-hunter scan postgres://user:pass@host:5432/dbname?schema=public&row_lim
 pii-leak-hunter scan s3://bucket/path/to/logs/
 pii-leak-hunter scan 'servicenow://your-instance-host?table=incident&query=active=true'
 pii-leak-hunter scan 'notion://workspace?query=prod&page_size=25'
+pii-leak-hunter scan 'github://your-org'
+pii-leak-hunter scan 'azuredevops://workspace?organization_url=https://dev.azure.com/your-org&project=security'
+pii-leak-hunter scan 'monday://workspace?query=incident'
+pii-leak-hunter scan 'teams://workspace?team_query=security'
 ```
 
 ---
@@ -198,7 +237,7 @@ streamlit run pii_leak_hunter/ui/app.py
 The web console now includes:
 
 - Remote provider scans with in-session credential fields
-- Target / URI builders for local paths, Postgres, S3, ServiceNow, and Notion
+- Target / URI builders for local paths, Postgres, S3, ServiceNow, Notion, Confluence, Jira, Azure DevOps, GitHub, Slack, Google Workspace, Monday, Microsoft Teams, Zendesk, and Snowflake
 - Local file upload scans
 - Default “scan all logs for leaks” mode for remote providers, with optional custom provider filters
 - Optional baseline artifact upload from prior safe JSON or evidence packs

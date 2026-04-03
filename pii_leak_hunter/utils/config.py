@@ -124,6 +124,197 @@ class NotionConfig:
         return cls(api_key=api_key, notion_version=notion_version)
 
 
+@dataclass(slots=True)
+class CloudWatchConfig:
+    region: str | None = None
+    log_group_prefix: str | None = None
+    log_groups: list[str] | None = None
+    max_log_groups: int = 50
+
+    @classmethod
+    def from_env(cls) -> "CloudWatchConfig":
+        region = os.getenv("AWS_REGION", "").strip() or os.getenv("AWS_DEFAULT_REGION", "").strip() or None
+        log_group_prefix = os.getenv("AWS_CLOUDWATCH_LOG_GROUP_PREFIX", "").strip() or None
+        groups_value = os.getenv("AWS_CLOUDWATCH_LOG_GROUPS", "").strip()
+        log_groups = [item.strip() for item in groups_value.split(",") if item.strip()] or None
+        max_log_groups = int(os.getenv("AWS_CLOUDWATCH_MAX_LOG_GROUPS", "50").strip() or "50")
+        return cls(
+            region=region,
+            log_group_prefix=log_group_prefix,
+            log_groups=log_groups,
+            max_log_groups=max_log_groups,
+        )
+
+
+@dataclass(slots=True)
+class ConfluenceConfig:
+    base_url: str
+    email: str | None = None
+    api_token: str | None = None
+    bearer_token: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "ConfluenceConfig":
+        base_url = _required_env("CONFLUENCE_BASE_URL", "Confluence scans").rstrip("/")
+        bearer_token = os.getenv("CONFLUENCE_BEARER_TOKEN", "").strip() or None
+        if bearer_token:
+            return cls(base_url=base_url, bearer_token=bearer_token)
+        email = os.getenv("CONFLUENCE_EMAIL", "").strip() or None
+        api_token = os.getenv("CONFLUENCE_API_TOKEN", "").strip() or None
+        if email and api_token:
+            return cls(base_url=base_url, email=email, api_token=api_token)
+        raise ConfigurationError(
+            "Confluence scans require CONFLUENCE_BEARER_TOKEN or both CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN."
+        )
+
+
+@dataclass(slots=True)
+class JiraConfig:
+    base_url: str
+    email: str | None = None
+    api_token: str | None = None
+    bearer_token: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "JiraConfig":
+        base_url = _required_env("JIRA_BASE_URL", "Jira scans").rstrip("/")
+        bearer_token = os.getenv("JIRA_BEARER_TOKEN", "").strip() or None
+        if bearer_token:
+            return cls(base_url=base_url, bearer_token=bearer_token)
+        email = os.getenv("JIRA_EMAIL", "").strip() or None
+        api_token = os.getenv("JIRA_API_TOKEN", "").strip() or None
+        if email and api_token:
+            return cls(base_url=base_url, email=email, api_token=api_token)
+        raise ConfigurationError("Jira scans require JIRA_BEARER_TOKEN or both JIRA_EMAIL and JIRA_API_TOKEN.")
+
+
+@dataclass(slots=True)
+class AzureDevOpsConfig:
+    organization_url: str
+    pat: str
+
+    @classmethod
+    def from_env(cls) -> "AzureDevOpsConfig":
+        organization_url = _required_env("AZURE_DEVOPS_ORG_URL", "Azure DevOps scans").rstrip("/")
+        pat = _required_env("AZURE_DEVOPS_PAT", "Azure DevOps scans")
+        return cls(organization_url=organization_url, pat=pat)
+
+
+@dataclass(slots=True)
+class GitHubSourceConfig:
+    token: str
+    api_base_url: str = "https://api.github.com"
+
+    @classmethod
+    def from_env(cls) -> "GitHubSourceConfig":
+        token = _required_env("GITHUB_TOKEN", "GitHub scans")
+        api_base_url = os.getenv("GITHUB_API_URL", "https://api.github.com").strip() or "https://api.github.com"
+        return cls(token=token, api_base_url=api_base_url.rstrip("/"))
+
+
+@dataclass(slots=True)
+class ZendeskConfig:
+    base_url: str
+    email: str | None = None
+    api_token: str | None = None
+    bearer_token: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "ZendeskConfig":
+        base_url = _required_env("ZENDESK_BASE_URL", "Zendesk scans").rstrip("/")
+        bearer_token = os.getenv("ZENDESK_BEARER_TOKEN", "").strip() or None
+        if bearer_token:
+            return cls(base_url=base_url, bearer_token=bearer_token)
+        email = os.getenv("ZENDESK_EMAIL", "").strip() or None
+        api_token = os.getenv("ZENDESK_API_TOKEN", "").strip() or None
+        if email and api_token:
+            return cls(base_url=base_url, email=email, api_token=api_token)
+        raise ConfigurationError(
+            "Zendesk scans require ZENDESK_BEARER_TOKEN or both ZENDESK_EMAIL and ZENDESK_API_TOKEN."
+        )
+
+
+@dataclass(slots=True)
+class SnowflakeConfig:
+    account_url: str
+    token: str
+    warehouse: str | None = None
+    database: str | None = None
+    schema: str | None = None
+    role: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "SnowflakeConfig":
+        account_url = _required_env("SNOWFLAKE_ACCOUNT_URL", "Snowflake scans").rstrip("/")
+        token = _required_env("SNOWFLAKE_TOKEN", "Snowflake scans")
+        warehouse = os.getenv("SNOWFLAKE_WAREHOUSE", "").strip() or None
+        database = os.getenv("SNOWFLAKE_DATABASE", "").strip() or None
+        schema = os.getenv("SNOWFLAKE_SCHEMA", "").strip() or None
+        role = os.getenv("SNOWFLAKE_ROLE", "").strip() or None
+        return cls(
+            account_url=account_url,
+            token=token,
+            warehouse=warehouse,
+            database=database,
+            schema=schema,
+            role=role,
+        )
+
+
+@dataclass(slots=True)
+class SlackConfig:
+    token: str
+    base_url: str = "https://slack.com/api"
+
+    @classmethod
+    def from_env(cls) -> "SlackConfig":
+        token = _required_env("SLACK_BOT_TOKEN", "Slack scans")
+        base_url = os.getenv("SLACK_API_URL", "https://slack.com/api").strip() or "https://slack.com/api"
+        return cls(token=token, base_url=base_url.rstrip("/"))
+
+
+@dataclass(slots=True)
+class GoogleWorkspaceConfig:
+    token: str
+    drive_base_url: str = "https://www.googleapis.com/drive/v3"
+
+    @classmethod
+    def from_env(cls) -> "GoogleWorkspaceConfig":
+        token = _required_env("GOOGLE_WORKSPACE_TOKEN", "Google Workspace scans")
+        drive_base_url = (
+            os.getenv("GOOGLE_WORKSPACE_DRIVE_API_URL", "https://www.googleapis.com/drive/v3").strip()
+            or "https://www.googleapis.com/drive/v3"
+        )
+        return cls(token=token, drive_base_url=drive_base_url.rstrip("/"))
+
+
+@dataclass(slots=True)
+class MondayConfig:
+    token: str
+    api_url: str = "https://api.monday.com/v2"
+
+    @classmethod
+    def from_env(cls) -> "MondayConfig":
+        token = _required_env("MONDAY_API_TOKEN", "monday.com scans")
+        api_url = os.getenv("MONDAY_API_URL", "https://api.monday.com/v2").strip() or "https://api.monday.com/v2"
+        return cls(token=token, api_url=api_url.rstrip("/"))
+
+
+@dataclass(slots=True)
+class TeamsConfig:
+    token: str
+    graph_base_url: str = "https://graph.microsoft.com/v1.0"
+
+    @classmethod
+    def from_env(cls) -> "TeamsConfig":
+        token = _required_env("TEAMS_GRAPH_TOKEN", "Microsoft Teams scans")
+        graph_base_url = (
+            os.getenv("TEAMS_GRAPH_API_URL", "https://graph.microsoft.com/v1.0").strip()
+            or "https://graph.microsoft.com/v1.0"
+        )
+        return cls(token=token, graph_base_url=graph_base_url.rstrip("/"))
+
+
 def _build_base_url(region: str) -> str:
     normalized = region.strip().rstrip("/")
     if normalized.startswith("http://") or normalized.startswith("https://"):

@@ -33,7 +33,7 @@ class Correlator:
             type="entity_detection",
             severity="low",
             entities=[detection],
-            context={"entity_type": detection.entity_type},
+            context={"entity_type": detection.entity_type, "record_timestamp": record.timestamp},
             source=record.source,
             safe_summary=f"{detection.entity_type} detected in {record.source}.",
         )
@@ -60,7 +60,7 @@ class Correlator:
                         type="masking_failure",
                         severity="low",
                         entities=[detection],
-                        context={"matched_tail": candidate},
+                        context={"matched_tail": candidate, "record_timestamp": record.timestamp},
                         source=record.source,
                         safe_summary=(
                             f"Masked and unmasked {detection.entity_type} variants appear together in one record."
@@ -86,7 +86,7 @@ class Correlator:
                 type="identity_bundle",
                 severity="low",
                 entities=entities,
-                context={"bundle_size": len(entities)},
+                context={"bundle_size": len(entities), "record_timestamp": record.timestamp},
                 source=record.source,
                 safe_summary="Identity bundle detected in a single log record.",
             )
@@ -113,7 +113,7 @@ class Correlator:
                 type="secret_pii_overlap",
                 severity="low",
                 entities=entities,
-                context={"entity_types": [entity.entity_type for entity in entities]},
+                context={"entity_types": [entity.entity_type for entity in entities], "record_timestamp": record.timestamp},
                 source=record.source,
                 safe_summary="Secret and PII detected together in one record.",
             )
@@ -138,7 +138,7 @@ class Correlator:
                     type="credential_bundle",
                     severity="low",
                     entities=bundle_members,
-                    context={"entity_types": sorted({entity.entity_type for entity in bundle_members})},
+                    context={"entity_types": sorted({entity.entity_type for entity in bundle_members}), "record_timestamp": record.timestamp},
                     source=record.source,
                     safe_summary="Cloud credential bundle detected in a single record.",
                 )
@@ -172,6 +172,7 @@ class Correlator:
                         for entity in entities
                         if entity.entity_type in INFRA_IDENTIFIER_ENTITY_TYPES
                     ],
+                    "record_timestamp": record.timestamp,
                 },
                 source=record.source,
                 safe_summary="Kubernetes control plane endpoint and bearer token detected together.",

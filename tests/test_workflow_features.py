@@ -4,9 +4,12 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from pii_leak_hunter.analysis.exposure_graph import build_exposure_graph
 from pii_leak_hunter.cli.main import app
 from pii_leak_hunter.core.baseline import apply_baseline, apply_baseline_payload, write_baseline
 from pii_leak_hunter.core.models import DetectionResult, Finding, ScanResult
+from pii_leak_hunter.analysis.context import infer_asset_mapping
+from pii_leak_hunter.hunts.recipes import apply_recipe, get_recipe, list_recipes
 from pii_leak_hunter.output.evidence_pack import write_evidence_pack
 from pii_leak_hunter.output.html_writer import write_html_report
 from pii_leak_hunter.ui.presentation import build_diff_summary, group_findings
@@ -243,3 +246,178 @@ def test_html_report_masks_raw_values_and_renders_risk_context(tmp_path: Path) -
     assert "Rotate the exposed credential or token immediately." in html
     assert "aws_secret=****ABCD" in html
     assert "super-secret-value" not in html
+
+
+def test_recipe_registry_contains_expected_hunts() -> None:
+    recipe_ids = {recipe.recipe_id for recipe in list_recipes()}
+    assert "prod-credentials" in recipe_ids
+    assert "secret-plus-pii" in recipe_ids
+    assert len(recipe_ids) >= 20
+
+
+def test_apply_recipe_filters_findings_to_high_signal_subset() -> None:
+    result = ScanResult(
+        findings=[
+            Finding(
+                id="a",
+                record_id="r1",
+                type="credential_bundle",
+                severity="critical",
+                entities=[
+                    DetectionResult(
+                        entity_type="AWS_SECRET_ACCESS_KEY",
+                        start=0,
+                        end=5,
+                        score=0.9,
+                        value_hash="hash-a",
+                        masked_preview="****",
+                    )
+                ],
+                context={"exploitability_priority": "P0"},
+                source="unit",
+                safe_summary="Bundle",
+            ),
+            Finding(
+                id="b",
+                record_id="r2",
+                type="entity_detection",
+                severity="low",
+                entities=[
+                    DetectionResult(
+                        entity_type="EMAIL_ADDRESS",
+                        start=0,
+                        end=5,
+                        score=0.6,
+                        value_hash="hash-b",
+                        masked_preview="mail=***",
+                    )
+                ],
+                context={"exploitability_priority": "P4"},
+                source="unit",
+                safe_summary="Email",
+            ),
+        ],
+        records_scanned=2,
+        source="unit",
+    )
+
+    filtered = apply_recipe(result, "prod-credentials")
+
+    assert len(filtered.findings) == 1
+    assert filtered.metadata["hunt_recipe"]["id"] == "prod-credentials"
+
+
+def test_exposure_graph_links_sources_records_findings_and_entities() -> None:
+    findings = [
+        Finding(
+            id="1",
+            record_id="rec-1",
+            type="credential_bundle",
+            severity="critical",
+            entities=[
+                DetectionResult(
+                    entity_type="AWS_ACCESS_KEY_ID",
+                    start=0,
+                    end=20,
+                    score=0.9,
+                    value_hash="same-hash",
+                    masked_preview="AKIA****",
+                )
+            ],
+            context={"exploitability_priority": "P0"},
+            source="cloudwatch",
+            safe_summary="Key exposed",
+        ),
+        Finding(
+            id="2",
+            record_id="rec-2",
+            type="entity_detection",
+            severity="high",
+            entities=[
+                DetectionResult(
+                    entity_type="AWS_ACCESS_KEY_ID",
+                    start=0,
+                    end=20,
+                    score=0.8,
+                    value_hash="same-hash",
+                    masked_preview="AKIA****",
+                )
+            ],
+            context={"exploitability_priority": "P1"},
+            source="jira",
+            safe_summary="Key repeated",
+        ),
+    ]
+
+    graph = build_exposure_graph(findings)
+
+    assert graph.metadata["repeated_entities"] == 1
+    assert graph.metadata["nodes"] >= 5
+    assert "digraph ExposureGraph" in graph.to_graphviz()
+
+
+def test_asset_mapping_pulls_service_env_and_channel_fields() -> None:
+    class Record:
+        source = "slack:incident-room"
+        attributes = {
+            "service": "payments-api",
+            "environment": "prod",
+            "channel": "incident-room",
+            "aws_account_id": "123456789012",
+        }
+
+    asset = infer_asset_mapping(Record())
+
+    assert asset["service"] == "payments-api"
+    assert asset["environment"] == "prod"
+    assert asset["channel"] == "incident-room"
+    assert asset["account"] == "123456789012"
+
+
+def test_group_findings_tracks_timeline_and_sources() -> None:
+    findings = [
+        Finding(
+            id="1",
+            record_id="r1",
+            type="entity_detection",
+            severity="high",
+            entities=[
+                DetectionResult(
+                    entity_type="API_KEY",
+                    start=0,
+                    end=8,
+                    score=0.9,
+                    value_hash="same-hash",
+                    masked_preview="key=***",
+                )
+            ],
+            context={"exploitability_priority": "P2", "record_timestamp": "2026-04-03T10:00:00Z"},
+            source="slack",
+            safe_summary="API key detected.",
+        ),
+        Finding(
+            id="2",
+            record_id="r2",
+            type="entity_detection",
+            severity="medium",
+            entities=[
+                DetectionResult(
+                    entity_type="API_KEY",
+                    start=0,
+                    end=8,
+                    score=0.7,
+                    value_hash="same-hash",
+                    masked_preview="key=***",
+                )
+            ],
+            context={"exploitability_priority": "P3", "record_timestamp": "2026-04-04T10:00:00Z"},
+            source="googleworkspace",
+            safe_summary="API key detected again.",
+        ),
+    ]
+
+    group = group_findings(findings)[0]
+
+    assert group.first_seen == "2026-04-03T10:00:00Z"
+    assert group.last_seen == "2026-04-04T10:00:00Z"
+    assert set(group.sources) == {"slack", "googleworkspace"}

@@ -42,6 +42,9 @@ class PresentationGroup:
     entity_types: list[str]
     hashes: list[str]
     baseline_statuses: list[str]
+    sources: list[str]
+    first_seen: str
+    last_seen: str
     findings: list[Finding] = field(default_factory=list)
 
     @property
@@ -89,6 +92,9 @@ def group_findings(findings: list[Finding]) -> list[PresentationGroup]:
                 entity_types=entity_types,
                 hashes=hashes,
                 baseline_statuses=statuses,
+                sources=sorted({finding.source}),
+                first_seen=str(finding.context.get("record_timestamp", "")),
+                last_seen=str(finding.context.get("record_timestamp", "")),
                 findings=[finding],
             )
             grouped[key] = group
@@ -99,6 +105,12 @@ def group_findings(findings: list[Finding]) -> list[PresentationGroup]:
         group.entity_types = sorted(set(group.entity_types) | set(entity_types))
         group.hashes = sorted(set(group.hashes) | set(hashes))
         group.baseline_statuses = sorted(set(group.baseline_statuses) | set(statuses))
+        group.sources = sorted(set(group.sources) | {finding.source})
+        timestamp = str(finding.context.get("record_timestamp", ""))
+        if timestamp and (not group.first_seen or timestamp < group.first_seen):
+            group.first_seen = timestamp
+        if timestamp and (not group.last_seen or timestamp > group.last_seen):
+            group.last_seen = timestamp
         masked_preview = _best_preview(finding.entities, include_values=False)
         raw_preview = _best_preview(finding.entities, include_values=True)
         if len(group.preview) < len(masked_preview):
@@ -121,6 +133,9 @@ def build_findings_rows(groups: list[PresentationGroup], *, include_values: bool
                 "entities": ", ".join(group.entity_types),
                 "preview": group.raw_preview if include_values else group.preview,
                 "records": ", ".join(group.record_ids[:3]),
+                "sources": ", ".join(group.sources[:3]),
+                "first_seen": group.first_seen,
+                "last_seen": group.last_seen,
             }
         )
     return rows
@@ -139,6 +154,32 @@ def exploitability_counts(findings: list[Finding]) -> list[tuple[str, int]]:
         counts.update([str(finding.context.get("exploitability_priority", "P4"))])
     ordered = sorted(counts.items(), key=lambda item: PRIORITY_ORDER.get(item[0], 99))
     return ordered
+
+
+def top_triage_rows(findings: list[Finding], limit: int = 10) -> list[dict[str, object]]:
+    ranked = sorted(
+        findings,
+        key=lambda finding: (
+            -int(finding.context.get("exploitability_score", 0)),
+            PRIORITY_ORDER.get(str(finding.context.get("exploitability_priority", "P4")), 99),
+            -SEVERITY_ORDER.get(finding.severity, 0),
+        ),
+    )
+    rows: list[dict[str, object]] = []
+    for finding in ranked[:limit]:
+        rows.append(
+            {
+                "priority": finding.context.get("exploitability_priority", "P4"),
+                "score": finding.context.get("exploitability_score", 0),
+                "bucket": finding.context.get("triage_bucket", "review"),
+                "severity": finding.severity,
+                "type": finding.type,
+                "source": finding.source,
+                "record_id": finding.record_id,
+                "summary": finding.safe_summary,
+            }
+        )
+    return rows
 
 
 def finding_matches_filters(
