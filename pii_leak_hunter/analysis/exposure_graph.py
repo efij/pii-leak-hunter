@@ -86,6 +86,7 @@ def build_exposure_graph(
         source_id = f"source:{finding.source}"
         record_id = f"record:{finding.record_id}"
         finding_id = f"finding:{finding.id}"
+        cluster_id_value = str(finding.context.get("cluster_id", "") or "")
         nodes.setdefault(source_id, ExposureNode(source_id, "source", finding.source, "neutral"))
         nodes.setdefault(record_id, ExposureNode(record_id, "record", finding.record_id, "neutral"))
         nodes.setdefault(
@@ -98,7 +99,16 @@ def build_exposure_graph(
             ),
         )
         edges[(source_id, record_id, "contains")] = ExposureEdge(source_id, record_id, "contains")
-        edges[(record_id, finding_id, "evidence")] = ExposureEdge(record_id, finding_id, "evidence")
+        if cluster_id_value:
+            cluster = finding.context.get("cluster", {})
+            cluster_node_id = f"cluster:{cluster_id_value}"
+            cluster_label = str(cluster.get("title", cluster_id_value))
+            cluster_tone = str(cluster.get("severity", finding.severity))
+            nodes.setdefault(cluster_node_id, ExposureNode(cluster_node_id, "cluster", cluster_label, cluster_tone))
+            edges[(record_id, cluster_node_id, "case")] = ExposureEdge(record_id, cluster_node_id, "case")
+            edges[(cluster_node_id, finding_id, "member")] = ExposureEdge(cluster_node_id, finding_id, "member")
+        else:
+            edges[(record_id, finding_id, "evidence")] = ExposureEdge(record_id, finding_id, "evidence")
         source_links += 1
         asset = finding.context.get("asset", {})
         if isinstance(asset, dict):
@@ -108,7 +118,8 @@ def build_exposure_graph(
                     continue
                 asset_id = f"asset:{key}:{value}"
                 nodes.setdefault(asset_id, ExposureNode(asset_id, "asset", f"{key}: {value}", "neutral"))
-                edges[(record_id, asset_id, key)] = ExposureEdge(record_id, asset_id, key)
+                owner_id = f"cluster:{cluster_id_value}" if cluster_id_value else record_id
+                edges[(owner_id, asset_id, key)] = ExposureEdge(owner_id, asset_id, key)
         for entity in finding.entities:
             entity_id = f"entity:{entity.entity_type}:{entity.value_hash}"
             if entity_id in seen_entity_nodes:

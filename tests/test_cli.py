@@ -111,3 +111,12 @@ def test_scan_supports_unified_target_path() -> None:
     )
     assert result.exit_code == 0
     assert "Scanned 4 record(s)" in result.stdout
+
+
+def test_cli_version_surface_is_visible() -> None:
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert "PII Leak Hunter v7.0.0" in result.stdout
+    assert "https://github.com/efij/pii-leak-hunter" in result.stdout
+    assert "Hunt diff signatures: 30 families" in result.stdout

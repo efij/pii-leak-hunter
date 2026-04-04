@@ -10,10 +10,12 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
+from pii_leak_hunter import __version__
 from pii_leak_hunter.analysis.exposure_graph import build_exposure_graph
 from pii_leak_hunter.core.baseline import apply_baseline_payload, write_baseline
 from pii_leak_hunter.core.models import Finding, ScanResult
 from pii_leak_hunter.core.pipeline import Pipeline
+from pii_leak_hunter.hunts.live import DIFF_SIGNATURE_FAMILIES, apply_hunt_baseline, prepare_hunt_result, write_hunt_artifact
 from pii_leak_hunter.hunts.recipes import get_recipe, list_recipes
 from pii_leak_hunter.loader.file_loader import load_file
 from pii_leak_hunter.output.csv_writer import write_csv
@@ -39,6 +41,7 @@ from pii_leak_hunter.ui.presentation import (
     finding_matches_filters,
     group_findings,
     top_triage_rows,
+    top_growing_clusters,
     top_entity_families,
 )
 from pii_leak_hunter.utils.config import ConfigurationError
@@ -47,6 +50,9 @@ try:
     import streamlit as st
 except Exception as exc:  # pragma: no cover - import depends on runtime env
     raise RuntimeError("Streamlit is required to run the UI.") from exc
+
+REPO_URL = "https://github.com/efij/pii-leak-hunter"
+DIFF_SIGNATURE_FAMILY_COUNT = len(DIFF_SIGNATURE_FAMILIES)
 
 
 def run_app() -> None:
@@ -106,6 +112,9 @@ def _initialize_state() -> None:
 def _render_sidebar() -> tuple[bool, bool, str | None]:
     sidebar = st.sidebar
     sidebar.subheader("Session")
+    sidebar.caption(f"Version: `v{__version__}`")
+    sidebar.markdown(f"[Repository]({REPO_URL})")
+    sidebar.caption(f"Hunt diff signatures: `{DIFF_SIGNATURE_FAMILY_COUNT}` families")
     show_raw_values = sidebar.checkbox(
         "Show raw values in GUI",
         value=True,
@@ -686,6 +695,14 @@ def _execute_scan(
             status.markdown(f"**{label}**: connecting and loading records")
             progress.progress(35)
             result = runner(_make_progress_callback(progress, status, detail, label))
+        recipe_id = st.session_state.get("selected_recipe") or None
+        if recipe_id:
+            result = prepare_hunt_result(
+                result,
+                recipe_id=recipe_id,
+                target=label,
+                lookback=str(result.metadata.get("from", result.metadata.get("lookback", "n/a"))),
+            )
         status.markdown(f"**{label}**: loaded `{result.records_scanned}` record(s), analyzing findings")
         detail.caption("Running detection, correlation, and scoring.")
         progress.progress(60)
@@ -783,6 +800,8 @@ def _apply_uploaded_baseline(result: ScanResult, uploaded) -> ScanResult:
     if uploaded is None:
         return result
     payload = _load_baseline_payload(uploaded)
+    if isinstance(payload, dict) and payload.get("cluster_signatures") is not None:
+        return apply_hunt_baseline(result, payload, baseline_source=uploaded.name)
     return apply_baseline_payload(result, payload, baseline_source=uploaded.name)
 
 
@@ -915,6 +934,12 @@ def _render_result(
             file_name="baseline.json",
             mime="application/json",
         )
+        st.download_button(
+            "Download Hunt Artifact",
+            data=_build_hunt_data(result),
+            file_name="hunt-artifact.json",
+            mime="application/json",
+        )
         if selected_recipe:
             recipe = get_recipe(selected_recipe)
             if recipe is not None:
@@ -937,6 +962,12 @@ def _render_result(
         st.markdown("#### Triage Queue")
         triage_rows = top_triage_rows(result.findings)
         st.dataframe(triage_rows or [{"priority": "P4", "score": 0, "bucket": "backlog", "severity": "low", "type": "none", "source": result.source, "record_id": "-", "summary": "No findings"}], use_container_width=True)
+        hunt_summary = result.metadata.get("hunt_summary", {})
+        if isinstance(hunt_summary, dict) and hunt_summary:
+            st.markdown("#### Hunt Delta")
+            st.write(
+                f"New exposures: `{hunt_summary.get('new_clusters', 0)}` | Existing: `{hunt_summary.get('existing_clusters', 0)}` | Resolved: `{hunt_summary.get('resolved_clusters', 0)}`"
+            )
     with overview_right:
         st.markdown("#### Top Entity Families")
         entity_rows = [
@@ -957,6 +988,12 @@ def _render_result(
             for finding in result.findings[:10]
         ]
         st.dataframe(asset_rows or [{"asset": "unknown", "priority": "P4", "source": result.source}], use_container_width=True)
+        st.markdown("#### Top Growing Campaigns")
+        growing_rows = top_growing_clusters(result)
+        st.dataframe(
+            growing_rows or [{"cluster": "None", "priority": "P4", "severity": "low", "seen_count": 0, "source_count": 0, "asset_count": 0, "first_seen": "", "last_seen": ""}],
+            use_container_width=True,
+        )
 
     st.subheader("Exposure Graph")
     graph = build_exposure_graph(result.findings, include_values=show_raw_values)
@@ -992,7 +1029,7 @@ def _render_result(
         )
     with controls[2]:
         selected_statuses = st.multiselect(
-            "Baseline status",
+            "Baseline / Hunt status",
             options=["new", "existing", "current"],
             default=default_statuses,
         )
@@ -1078,6 +1115,12 @@ def _render_reports(result: ScanResult, unsafe_show_values: bool, include_values
             file_name="baseline.json",
             mime="application/json",
         )
+        st.download_button(
+            "Download Hunt Artifact",
+            data=_build_hunt_data(result),
+            file_name="hunt-artifact.json",
+            mime="application/json",
+        )
     with export_right:
         st.download_button(
             "Download JSON",
@@ -1118,6 +1161,14 @@ def _render_group_detail(group, show_raw_values: bool) -> None:
     st.write(f"Sources: `{', '.join(group.sources)}`")
     if group.first_seen or group.last_seen:
         st.write(f"Timeline: `{group.first_seen or 'unknown'}` -> `{group.last_seen or 'unknown'}`")
+    sample_finding = group.findings[0] if group.findings else None
+    if sample_finding:
+        cluster = sample_finding.context.get("cluster", {})
+        if isinstance(cluster, dict):
+            validation = cluster.get("validation", [])
+            if validation:
+                st.markdown("#### Cluster Validation")
+                st.json(validation)
     preview = group.raw_preview if show_raw_values and group.raw_preview else group.preview
     st.write(preview or "Preview unavailable.")
     for finding in group.findings:
@@ -1132,6 +1183,13 @@ def _render_finding_detail(finding: Finding, show_raw_values: bool) -> None:
         st.write(f"Asset: `{asset_summary}`")
     if finding.context.get("record_timestamp"):
         st.write(f"Seen at: `{finding.context.get('record_timestamp')}`")
+    if finding.context.get("timeline"):
+        timeline = finding.context.get("timeline")
+        st.markdown("#### Spread")
+        st.json(timeline)
+    if finding.context.get("validation"):
+        st.markdown("#### Validation")
+        st.json(finding.context.get("validation"))
     if show_raw_values:
         raw_values = [
             {
@@ -1250,7 +1308,7 @@ def _finding_rows(findings: list[Finding], *, include_values: bool = False) -> l
                 "type": finding.type,
                 "record_id": finding.record_id,
                 "entity": entity.entity_type if entity else "",
-                "baseline": finding.context.get("baseline_status", "current"),
+                "baseline": finding.context.get("hunt_status", finding.context.get("baseline_status", "current")),
                 "preview": (
                     entity.raw_value
                     if include_values and entity and entity.raw_value
@@ -1270,6 +1328,8 @@ def _matches_text_filter(finding: Finding, query: str) -> bool:
             finding.type,
             finding.record_id,
             finding.safe_summary,
+            str(finding.context.get("asset_summary", "")),
+            str(finding.context.get("cluster_id", "")),
             " ".join(entity.entity_type for entity in finding.entities),
             " ".join(entity.masked_preview for entity in finding.entities),
         ]
@@ -1318,13 +1378,28 @@ def _build_baseline_data(result: ScanResult) -> str:
         temp_path.unlink(missing_ok=True)
 
 
+def _build_hunt_data(result: ScanResult) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+        temp_path = Path(handle.name)
+    try:
+        write_hunt_artifact(result, str(temp_path))
+        return temp_path.read_text(encoding="utf-8")
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def _render_hero() -> None:
     st.markdown(
-        """
+        f"""
         <div class="plh-hero">
           <p class="plh-kicker">PII Leak Hunter</p>
           <h1>Operator-grade leak hunting with actual scan controls, not just a thin demo shell.</h1>
           <p class="plh-copy">Configure providers in-session, scan remote platforms or URI targets, watch scan progress, compare against baselines, and export a polished audit report without exposing raw secrets by default.</p>
+          <div class="plh-meta">
+            <span>v{__version__}</span>
+            <span>{DIFF_SIGNATURE_FAMILY_COUNT} diff signature families</span>
+            <a href="{REPO_URL}" target="_blank" rel="noreferrer">Repository</a>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1371,6 +1446,25 @@ def _inject_styles() -> None:
             max-width: 58rem;
             color: #5f554e;
             font-size: 1rem;
+          }
+          .plh-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            margin-top: 0.95rem;
+          }
+          .plh-meta span,
+          .plh-meta a {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.42rem 0.72rem;
+            border-radius: 999px;
+            background: rgba(190, 91, 54, 0.1);
+            border: 1px solid rgba(190, 91, 54, 0.16);
+            color: #6f402d;
+            text-decoration: none;
+            font-size: 0.92rem;
+            font-weight: 600;
           }
           .plh-card-grid {
             display: grid;

@@ -77,24 +77,26 @@ def group_findings(findings: list[Finding]) -> list[PresentationGroup]:
     for finding in findings:
         key, title = _group_identity(finding)
         group = grouped.get(key)
+        cluster = finding.context.get("cluster", {})
+        cluster_timeline = cluster.get("timeline", {}) if isinstance(cluster, dict) else {}
         entity_types = sorted({entity.entity_type for entity in finding.entities})
         hashes = sorted({entity.value_hash[:12] for entity in finding.entities})
         statuses = [str(finding.context.get("baseline_status", "current"))]
         if group is None:
             group = PresentationGroup(
                 key=key,
-                title=title,
-                severity=finding.severity,
-                priority=str(finding.context.get("exploitability_priority", "P4")),
-                finding_type=finding.type,
+                title=str(cluster.get("title", title)),
+                severity=str(cluster.get("severity", finding.severity)),
+                priority=str(cluster.get("priority", finding.context.get("exploitability_priority", "P4"))),
+                finding_type=str(cluster.get("finding_type", finding.type)),
                 preview=_best_preview(finding.entities, include_values=False),
                 raw_preview=_best_preview(finding.entities, include_values=True),
                 entity_types=entity_types,
                 hashes=hashes,
                 baseline_statuses=statuses,
                 sources=sorted({finding.source}),
-                first_seen=str(finding.context.get("record_timestamp", "")),
-                last_seen=str(finding.context.get("record_timestamp", "")),
+                first_seen=str(cluster_timeline.get("first_seen", finding.context.get("record_timestamp", ""))),
+                last_seen=str(cluster_timeline.get("last_seen", finding.context.get("record_timestamp", ""))),
                 findings=[finding],
             )
             grouped[key] = group
@@ -182,6 +184,43 @@ def top_triage_rows(findings: list[Finding], limit: int = 10) -> list[dict[str, 
     return rows
 
 
+def top_growing_clusters(result: ScanResult, limit: int = 10) -> list[dict[str, object]]:
+    cluster_summary = result.metadata.get("cluster_summary", {})
+    if not isinstance(cluster_summary, dict):
+        return []
+    clusters = cluster_summary.get("clusters", [])
+    if not isinstance(clusters, list):
+        return []
+    ranked = sorted(
+        (
+            cluster
+            for cluster in clusters
+            if isinstance(cluster, dict)
+        ),
+        key=lambda cluster: (
+            PRIORITY_ORDER.get(str(cluster.get("priority", "P4")), 99),
+            -int(cluster.get("seen_count", 0)),
+            -SEVERITY_ORDER.get(str(cluster.get("severity", "low")), 0),
+        ),
+    )
+    rows: list[dict[str, object]] = []
+    for cluster in ranked[:limit]:
+        timeline = cluster.get("timeline", {}) if isinstance(cluster.get("timeline"), dict) else {}
+        rows.append(
+            {
+                "cluster": cluster.get("title", cluster.get("cluster_id", "")),
+                "priority": cluster.get("priority", "P4"),
+                "severity": cluster.get("severity", "low"),
+                "seen_count": cluster.get("seen_count", 0),
+                "source_count": timeline.get("source_count", 0),
+                "asset_count": timeline.get("asset_count", 0),
+                "first_seen": timeline.get("first_seen", ""),
+                "last_seen": timeline.get("last_seen", ""),
+            }
+        )
+    return rows
+
+
 def finding_matches_filters(
     finding: Finding,
     *,
@@ -191,7 +230,7 @@ def finding_matches_filters(
 ) -> bool:
     severity = finding.severity
     priority = str(finding.context.get("exploitability_priority", "P4"))
-    baseline_status = str(finding.context.get("baseline_status", "current"))
+    baseline_status = str(finding.context.get("hunt_status", finding.context.get("baseline_status", "current")))
     return (
         severity in severities
         and priority in priorities
@@ -200,6 +239,11 @@ def finding_matches_filters(
 
 
 def _group_identity(finding: Finding) -> tuple[str, str]:
+    cluster_id = str(finding.context.get("cluster_id", "") or "")
+    if cluster_id:
+        cluster = finding.context.get("cluster", {})
+        title = str(cluster.get("title", finding.type.replace("_", " ").title())) if isinstance(cluster, dict) else finding.type.replace("_", " ").title()
+        return f"cluster:{cluster_id}", title
     entity_types = sorted({entity.entity_type for entity in finding.entities})
     if finding.type in INCIDENT_PRIORITY:
         key = f"type:{finding.type}:{','.join(entity_types)}"

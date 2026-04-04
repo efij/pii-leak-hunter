@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [7.0.0] - 2026-04-04
+
+### Added
+- First-class asset context with stable asset keys and connector-aware mapping fields across collaboration systems, SaaS tools, and cloud-backed records.
+- Timeline and spread analysis for repeated entities and campaign clusters, including first seen, last seen, source spread, and asset spread.
+- Validation engine with offline secret checks plus read-only provider validation hooks, currently including AWS pairing-aware STS validation and Datadog API key validation.
+- Campaign clustering above raw findings, with cluster metadata now available in scan results, reports, and the exposure graph.
+- Live Hunt mode with safe hunt artifacts, cluster-level diffing, and a new `pii-leak-hunter hunt ...` CLI command.
+- 30 hunt diff signature families so reruns can detect meaningful change across exact clusters, repeated hashes, assets, sources, asset drift, first/last-seen day, severity, priority, blast radius, validation class, and provider family.
+
+### Changed
+- The Streamlit UI now surfaces hunt deltas, top growing campaigns, cluster validation, spread summaries, and hunt artifact downloads.
+- HTML and Markdown reports now include campaigns, spread, validation, and hunt-level summaries instead of only flat finding lists.
+- The exposure graph now promotes clusters and assets as first-class nodes instead of treating assets as optional leaves.
+- This is now versioned as a major release because the scan result shape and primary investigation workflow moved from finding-first to campaign-first.
+- The CLI and Streamlit UI now show the running version and direct repository identity, and the CLI help text is clearer about platform usage and hunt diff behavior.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
 ## [6.2.0] - 2026-04-04
 
 ### Added

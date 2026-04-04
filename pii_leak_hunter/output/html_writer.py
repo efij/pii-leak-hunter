@@ -25,6 +25,9 @@ def write_html_report(
     exploitability = exploitability_counts(result.findings)
     top_entities = top_entity_families(result.findings)
     triage_rows = top_triage_rows(result.findings)
+    cluster_summary = result.metadata.get("cluster_summary", {}) if isinstance(result.metadata.get("cluster_summary"), dict) else {}
+    hunt_summary = result.metadata.get("hunt_summary", {}) if isinstance(result.metadata.get("hunt_summary"), dict) else {}
+    validation_summary = result.metadata.get("validation_summary", {}) if isinstance(result.metadata.get("validation_summary"), dict) else {}
     cards = "".join(
         _metric_card(label, count, tone)
         for label, count, tone in (
@@ -50,6 +53,23 @@ def write_html_report(
             _metric_card("New", diff.new, "critical"),
             _metric_card("Unchanged", diff.unchanged, "neutral"),
             _metric_card("Resolved", diff.resolved, "low"),
+        )
+    hunt_delta = ""
+    if hunt_summary:
+        hunt_delta = """
+        <section class="panel">
+          <div class="section-head">
+            <h2>Hunt Diff</h2>
+            <p>Cluster-level changes against the previous hunt artifact.</p>
+          </div>
+          <div class="stats-grid">
+            %s%s%s
+          </div>
+        </section>
+        """ % (
+            _metric_card("New Clusters", int(hunt_summary.get("new_clusters", 0)), "critical"),
+            _metric_card("Existing", int(hunt_summary.get("existing_clusters", 0)), "neutral"),
+            _metric_card("Resolved", int(hunt_summary.get("resolved_clusters", 0)), "low"),
         )
 
     findings_markup = ["<section class=\"panel\"><div class=\"section-head\"><h2>Findings</h2><p>Masked previews and hashes only.</p></div>"]
@@ -100,7 +120,7 @@ def write_html_report(
     metadata_lines = "".join(
         f"<li><strong>{escape(str(key))}</strong><span>{escape(str(value))}</span></li>"
         for key, value in sorted(result.metadata.items())
-        if key != "baseline"
+        if key not in {"baseline", "cluster_summary", "validation_summary", "timeline_summary", "hunt_summary"}
     )
     exploitability_markup = "".join(
         f"<li><span>{escape(priority)}</span><strong>{count}</strong></li>"
@@ -346,6 +366,7 @@ def write_html_report(
       <div class="hero-meta">
         <span>Records Scanned: <strong>{result.records_scanned}</strong></span>
         <span>Findings: <strong>{len(result.findings)}</strong></span>
+        <span>Campaigns: <strong>{cluster_summary.get("total_clusters", 0)}</strong></span>
         <span>Obfuscation: <strong>{"unsafe" if include_values else "safe"}</strong></span>
       </div>
     </section>
@@ -359,6 +380,7 @@ def write_html_report(
     </section>
 
     {delta}
+    {hunt_delta}
 
     <section class="panel">
       <div class="section-head">
@@ -387,10 +409,18 @@ def write_html_report(
       </div>
       <div class="two-col" style="margin-top: 18px;">
         <div>
+          <h3>Campaigns & Spread</h3>
+          <ul class="meta-list">
+            <li><strong>Total Clusters</strong><span>{cluster_summary.get("total_clusters", 0)}</span></li>
+            <li><strong>Provider Checks</strong><span>{validation_summary.get("provider_checks_run", 0)}</span></li>
+            <li><strong>Likely Live</strong><span>{validation_summary.get("likely_live_findings", 0)}</span></li>
+          </ul>
+        </div>
+        <div>
           <h3>Report Guarantees</h3>
           <ul class="meta-list">
             <li><strong>Raw Values</strong><span>{"Shown only in unsafe mode" if include_values else "Never shown"}</span></li>
-            <li><strong>Finding Display</strong><span>Grouped by incident family or repeated hash</span></li>
+            <li><strong>Finding Display</strong><span>Grouped by cluster, incident family, or repeated hash</span></li>
             <li><strong>Shareability</strong><span>Print-friendly HTML for browser PDF export</span></li>
           </ul>
         </div>
@@ -418,6 +448,8 @@ def _finding_details(findings, *, include_values: bool) -> str:
         policy_tags = ", ".join(str(tag) for tag in finding.context.get("policy_tags", []))
         remediation = "; ".join(str(step) for step in finding.context.get("remediation", []))
         reasons = "; ".join(str(reason) for reason in finding.context.get("risk_reasons", []))
+        timeline = finding.context.get("timeline", {})
+        validations = finding.context.get("validation", [])
         items.append("<li>")
         items.append(f"<strong>{escape(finding.record_id)}</strong>")
         items.append(f"<div>{escape(finding.safe_summary)}</div>")
@@ -436,6 +468,23 @@ def _finding_details(findings, *, include_values: bool) -> str:
             items.append(f"<div>Why it matters: {escape(reasons)}</div>")
         if remediation:
             items.append(f"<div>Remediation: {escape(remediation)}</div>")
+        if isinstance(timeline, dict) and timeline:
+            items.append(
+                "<div>Spread: first seen <strong>%s</strong> | last seen <strong>%s</strong> | sources <strong>%s</strong> | assets <strong>%s</strong></div>"
+                % (
+                    escape(str(timeline.get("first_seen", "unknown"))),
+                    escape(str(timeline.get("last_seen", "unknown"))),
+                    escape(str(timeline.get("source_count", 0))),
+                    escape(str(timeline.get("asset_count", 0))),
+                )
+            )
+        if isinstance(validations, list) and validations:
+            validation_text = "; ".join(
+                f"{item.get('entity_type', '')}:{item.get('classification', '')}"
+                for item in validations
+                if isinstance(item, dict)
+            )
+            items.append(f"<div>Validation: {escape(validation_text)}</div>")
         if include_values:
             raw_values = [entity.raw_value for entity in finding.entities if entity.raw_value]
             if raw_values:

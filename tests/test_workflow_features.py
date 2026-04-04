@@ -4,11 +4,15 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from pii_leak_hunter.analysis.clustering import cluster_findings
 from pii_leak_hunter.analysis.exposure_graph import build_exposure_graph
+from pii_leak_hunter.analysis.timeline import build_timeline
+from pii_leak_hunter.analysis.validation import ValidationEngine
 from pii_leak_hunter.cli.main import app
 from pii_leak_hunter.core.baseline import apply_baseline, apply_baseline_payload, write_baseline
-from pii_leak_hunter.core.models import DetectionResult, Finding, ScanResult
+from pii_leak_hunter.core.models import DetectionResult, Finding, ScanResult, ValidationResult
 from pii_leak_hunter.analysis.context import infer_asset_mapping
+from pii_leak_hunter.hunts.live import apply_hunt_baseline, build_diff_signatures, write_hunt_artifact
 from pii_leak_hunter.hunts.recipes import apply_recipe, get_recipe, list_recipes
 from pii_leak_hunter.output.evidence_pack import write_evidence_pack
 from pii_leak_hunter.output.html_writer import write_html_report
@@ -90,6 +94,21 @@ def test_scan_file_supports_baseline_and_evidence_pack(tmp_path: Path) -> None:
     assert second.exit_code == 0
     assert evidence_path.exists()
     assert "Baseline: new=0" in second.stdout
+
+
+def test_hunt_command_writes_hunt_artifact(tmp_path: Path) -> None:
+    runner = CliRunner()
+    artifact_path = tmp_path / "hunt-artifact.json"
+
+    result = runner.invoke(
+        app,
+        ["hunt", "prod-credentials", "fixtures/demo_logs.ndjson", "--baseline-out", str(artifact_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert payload["recipe"] == "prod-credentials"
+    assert "cluster_signatures" in payload
 
 
 def test_baseline_payload_from_safe_scan_tracks_resolved_findings() -> None:
@@ -368,10 +387,11 @@ def test_asset_mapping_pulls_service_env_and_channel_fields() -> None:
 
     asset = infer_asset_mapping(Record())
 
-    assert asset["service"] == "payments-api"
-    assert asset["environment"] == "prod"
-    assert asset["channel"] == "incident-room"
-    assert asset["account"] == "123456789012"
+    assert asset.service == "payments-api"
+    assert asset.environment == "prod"
+    assert asset.channel == "incident-room"
+    assert asset.account == "123456789012"
+    assert asset.asset_key
 
 
 def test_group_findings_tracks_timeline_and_sources() -> None:
@@ -421,3 +441,255 @@ def test_group_findings_tracks_timeline_and_sources() -> None:
     assert group.first_seen == "2026-04-03T10:00:00Z"
     assert group.last_seen == "2026-04-04T10:00:00Z"
     assert set(group.sources) == {"slack", "googleworkspace"}
+
+
+def test_timeline_validation_and_clustering_enrich_findings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "pii_leak_hunter.analysis.validation._aws_sts_check",
+        lambda access_key, secret_key: ValidationResult(
+            classification="likely_live",
+            provider_family="aws",
+            entity_type="AWS_SECRET_ACCESS_KEY",
+            evidence=["stubbed sts"],
+            confidence="high",
+            provider_check_run=True,
+        ),
+    )
+    findings = [
+        Finding(
+            id="1",
+            record_id="r1",
+            type="credential_bundle",
+            severity="critical",
+            entities=[
+                DetectionResult(
+                    entity_type="AWS_ACCESS_KEY_ID",
+                    start=0,
+                    end=20,
+                    score=0.9,
+                    value_hash="hash-ak",
+                    masked_preview="AKIA****",
+                    raw_value="AKIAABCDEFGHIJKLMNOP",
+                ),
+                DetectionResult(
+                    entity_type="AWS_SECRET_ACCESS_KEY",
+                    start=21,
+                    end=61,
+                    score=0.9,
+                    value_hash="hash-sk",
+                    masked_preview="****ABCD",
+                    raw_value="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                ),
+            ],
+            context={
+                "record_timestamp": "2026-04-03T10:00:00Z",
+                "asset_summary": "payments-api / prod",
+                "asset_key": "payments-api|prod",
+                "exploitability_priority": "P0",
+            },
+            source="github",
+            safe_summary="Bundle one",
+        ),
+        Finding(
+            id="2",
+            record_id="r2",
+            type="credential_bundle",
+            severity="critical",
+            entities=[
+                DetectionResult(
+                    entity_type="AWS_ACCESS_KEY_ID",
+                    start=0,
+                    end=20,
+                    score=0.9,
+                    value_hash="hash-ak",
+                    masked_preview="AKIA****",
+                    raw_value="AKIAABCDEFGHIJKLMNOP",
+                ),
+                DetectionResult(
+                    entity_type="AWS_SECRET_ACCESS_KEY",
+                    start=21,
+                    end=61,
+                    score=0.9,
+                    value_hash="hash-sk",
+                    masked_preview="****ABCD",
+                    raw_value="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                ),
+            ],
+            context={
+                "record_timestamp": "2026-04-04T10:00:00Z",
+                "asset_summary": "payments-api / prod",
+                "asset_key": "payments-api|prod",
+                "exploitability_priority": "P0",
+            },
+            source="slack",
+            safe_summary="Bundle two",
+        ),
+    ]
+
+    validation = ValidationEngine().validate_entities(findings)
+    assert validation["families"]["aws"] >= 1
+    timeline = build_timeline(findings)
+    assert timeline["repeated_entity_groups"] >= 1
+    clusters = cluster_findings(findings)
+
+    assert len(clusters) == 1
+    assert findings[0].context["timeline"]["source_count"] == 2
+    assert findings[0].context["cluster_id"] == clusters[0].cluster_id
+    assert findings[0].context["validation"][0]["classification"] in {"paired", "likely_live", "insufficient_scope"}
+
+
+def test_hunt_artifact_tracks_new_clusters(tmp_path: Path) -> None:
+    baseline = ScanResult(
+        findings=[],
+        records_scanned=0,
+        source="unit",
+        metadata={
+            "cluster_summary": {
+                "total_clusters": 1,
+                "clusters": [
+                    {
+                        "cluster_id": "old",
+                        "title": "Old Cluster",
+                        "finding_type": "entity_detection",
+                        "entity_hashes": ["hash-a"],
+                        "assets": ["asset-a"],
+                        "sources": ["slack"],
+                        "timeline": {"first_seen": "", "last_seen": "", "source_count": 1, "asset_count": 1},
+                    }
+                ],
+            }
+        },
+    )
+    baseline_path = tmp_path / "hunt.json"
+    write_hunt_artifact(baseline, str(baseline_path))
+
+    result = ScanResult(
+        findings=[
+            Finding(
+                id="1",
+                record_id="r1",
+                type="entity_detection",
+                severity="high",
+                entities=[
+                    DetectionResult(
+                        entity_type="API_KEY",
+                        start=0,
+                        end=8,
+                        score=0.8,
+                        value_hash="hash-b",
+                        masked_preview="key=***",
+                    )
+                ],
+                context={
+                    "cluster_id": "new",
+                    "cluster": {
+                        "cluster_id": "new",
+                        "title": "New Cluster",
+                        "finding_type": "entity_detection",
+                        "entity_hashes": ["hash-b"],
+                        "assets": ["asset-b"],
+                        "sources": ["github"],
+                        "timeline": {"first_seen": "", "last_seen": "", "source_count": 1, "asset_count": 1},
+                    },
+                },
+                source="github",
+                safe_summary="new",
+            )
+        ],
+        records_scanned=1,
+        source="unit",
+        metadata={
+            "cluster_summary": {
+                "total_clusters": 1,
+                "clusters": [
+                    {
+                        "cluster_id": "new",
+                        "title": "New Cluster",
+                        "finding_type": "entity_detection",
+                        "entity_hashes": ["hash-b"],
+                        "assets": ["asset-b"],
+                        "sources": ["github"],
+                        "timeline": {"first_seen": "", "last_seen": "", "source_count": 1, "asset_count": 1},
+                    }
+                ],
+            }
+        },
+    )
+
+    updated = apply_hunt_baseline(result, json.loads(baseline_path.read_text(encoding="utf-8")))
+
+    assert updated.metadata["hunt_summary"]["new_clusters"] == 1
+    assert updated.findings[0].context["hunt_status"] == "new"
+
+
+def test_build_diff_signatures_exposes_many_signature_families() -> None:
+    result = ScanResult(
+        findings=[
+            Finding(
+                id="1",
+                record_id="r1",
+                type="credential_bundle",
+                severity="critical",
+                entities=[
+                    DetectionResult(
+                        entity_type="AWS_SECRET_ACCESS_KEY",
+                        start=0,
+                        end=40,
+                        score=0.9,
+                        value_hash="hash-secret",
+                        masked_preview="****ABCD",
+                    )
+                ],
+                context={
+                    "asset_key": "payments-api|prod",
+                    "asset_summary": "payments-api / prod",
+                    "asset": {"environment": "prod"},
+                    "blast_radius": "cloud-account",
+                    "validation": [
+                        {
+                            "entity_type": "AWS_SECRET_ACCESS_KEY",
+                            "classification": "paired",
+                            "provider_family": "aws",
+                        }
+                    ],
+                    "cluster": {
+                        "title": "Credential Bundle Spread",
+                        "finding_type": "credential_bundle",
+                        "priority": "P0",
+                        "severity": "critical",
+                        "entity_hashes": ["hash-secret"],
+                        "assets": ["payments-api / prod"],
+                        "sources": ["github", "slack"],
+                    },
+                },
+                source="github",
+                safe_summary="bundle",
+            )
+        ],
+        records_scanned=1,
+        source="github",
+        metadata={
+            "cluster_summary": {
+                "total_clusters": 1,
+                "clusters": [
+                    {
+                        "title": "Credential Bundle Spread",
+                        "finding_type": "credential_bundle",
+                        "priority": "P0",
+                        "severity": "critical",
+                        "entity_hashes": ["hash-secret"],
+                        "assets": ["payments-api / prod"],
+                        "sources": ["github", "slack"],
+                    }
+                ],
+            }
+        },
+    )
+
+    signatures = build_diff_signatures(result)
+
+    assert len(signatures) == 30
+    assert "cluster_exact" in signatures
+    assert "validation_classification" in signatures
+    assert "asset_environment" in signatures
+    assert "provider_family" in signatures

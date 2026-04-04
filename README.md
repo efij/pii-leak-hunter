@@ -29,7 +29,11 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - **Streamlit web console** for source selection, credential entry, progress tracking, triage, baseline comparison, and visual exposure graphing
 - **Exploitability triage** with priority, score, and triage bucket
 - **Hunt recipes** with 20 built-in, modular high-signal workflows for researchers
-- **Asset mapping + timeline context** so grouped findings show service/project/env hints and when the leak first or last appeared
+- **Asset mapping + timeline context** so findings and campaigns show service/project/env hints, spread, and first/last seen
+- **Campaign clustering** so repeated leaks across systems collapse into one investigation case
+- **Secret validation** with offline checks and read-only provider validation hooks where supported
+- **Live Hunt mode** with safe hunt artifacts and diff-based reruns
+- **30 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, assets, sources, first/last-seen day, severity, priority, blast radius, provider family, and validation state
 - **Static HTML audit report** with masked evidence, exploitability ladder, and print-friendly layout
 - Output formats:
   - JSON
@@ -111,6 +115,31 @@ PII Leak Hunter is:
 
 ## ⚡ Quick start
 
+Version and repo identity are visible in both operator surfaces now:
+
+```bash
+pii-leak-hunter --version
+```
+
+The CLI prints the current version, repo URL, and hunt diff signature pack summary. The Streamlit UI hero and sidebar also show the current version plus a direct repository link.
+
+The hunt diff pack now tracks 30 practical signature families, including:
+- exact campaign identity
+- repeated secret hashes
+- entity type + hash
+- entity type + source
+- entity type + asset
+- campaign type + asset
+- campaign type + source
+- campaign priority and severity
+- asset + environment
+- asset + source
+- blast radius
+- provider family
+- validation family + classification
+- first-seen day
+- last-seen day
+
 ### 1. Install
 
 ```bash
@@ -190,6 +219,8 @@ pii-leak-hunter scan github://owner --recipe dev-collaboration
 pii-leak-hunter scan slack://workspace?channel_query=incident --recipe incident-war-room
 pii-leak-hunter scan googleworkspace://drive --recipe workspace-doc-leaks
 pii-leak-hunter recipes
+pii-leak-hunter hunt prod-credentials --provider datadog --baseline-out hunt.json
+pii-leak-hunter hunt incident-war-room slack://workspace?channel_query=incident --baseline-in hunt.json --new-only
 ```
 
 The built-in recipes are modular and live in `pii_leak_hunter/hunts/recipes.py`, so adding a new hunt is a small registry change rather than a CLI rewrite.
@@ -246,7 +277,9 @@ The web console now includes:
 - A `Scan Details` section with the effective provider query, syntax, time window, and parsed row counts for remote scans
 - Bounded Coralogix scan batches with partial results and resume support for long-running windows
 - Severity and exploitability overview cards
-- Grouped findings drill-down with raw values shown in the GUI by default for easier validation
+- Cluster-first findings drill-down with raw values shown in the GUI by default for easier validation
+- Top growing campaigns, validation summaries, and spread-aware asset views
+- Hunt artifact download plus cluster-level diffing when you upload a prior hunt artifact
 - Built-in least-privilege presets for major integrations
 - One-click export for HTML audit reports, JSON, CSV, Markdown, SARIF, and evidence packs
 

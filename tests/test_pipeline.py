@@ -19,3 +19,6 @@ def test_pipeline_detects_composite_findings() -> None:
     assert "critical" in severities
     safe_payload = result.to_safe_dict()
     assert "123-45-6789" not in str(safe_payload)
+    assert "timeline_summary" in result.metadata
+    assert "validation_summary" in result.metadata
+    assert "cluster_summary" in result.metadata
