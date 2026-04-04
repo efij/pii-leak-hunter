@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [7.1.0] - 2026-04-04
+
+### Added
+- 20 more practical hunt diff signature families, bringing the total pack to 50. The new signatures cover campaign growth buckets, source spread, asset spread, validation drift, provider-family drift, source priority/severity shifts, finding-type drift, and richer asset/provider combinations.
+
+### Changed
+- The Streamlit UI now follows a simpler scan -> summary -> campaigns -> reports -> details flow instead of presenting one long wall of controls and metadata.
+- The public hunt API now exports diff-signature constants and live-hunt helpers from the package boundary, which makes the CLI and Streamlit imports more stable.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
 ## [7.0.0] - 2026-04-04
 
 ### Added

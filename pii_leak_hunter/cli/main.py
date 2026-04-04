@@ -8,7 +8,7 @@ from pii_leak_hunter import __version__
 from pii_leak_hunter.core.baseline import apply_baseline, write_baseline
 from pii_leak_hunter.core.models import ScanResult
 from pii_leak_hunter.core.pipeline import Pipeline
-from pii_leak_hunter.hunts.live import (
+from pii_leak_hunter.hunts import (
     DIFF_SIGNATURE_FAMILIES,
     apply_hunt_baseline,
     load_hunt_artifact,

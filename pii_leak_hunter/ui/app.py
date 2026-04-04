@@ -15,7 +15,7 @@ from pii_leak_hunter.analysis.exposure_graph import build_exposure_graph
 from pii_leak_hunter.core.baseline import apply_baseline_payload, write_baseline
 from pii_leak_hunter.core.models import Finding, ScanResult
 from pii_leak_hunter.core.pipeline import Pipeline
-from pii_leak_hunter.hunts.live import DIFF_SIGNATURE_FAMILIES, apply_hunt_baseline, prepare_hunt_result, write_hunt_artifact
+from pii_leak_hunter.hunts import DIFF_SIGNATURE_FAMILIES, apply_hunt_baseline, prepare_hunt_result, write_hunt_artifact
 from pii_leak_hunter.hunts.recipes import get_recipe, list_recipes
 from pii_leak_hunter.loader.file_loader import load_file
 from pii_leak_hunter.output.csv_writer import write_csv
@@ -65,20 +65,21 @@ def run_app() -> None:
 
     top_left, top_right = st.columns([1.6, 1])
     with top_left:
-        st.subheader("Scan Console")
+        st.subheader("1. Run a Scan")
         st.caption(
-            "Choose a source, configure access in-session, run a read-only scan, and export safe reports without dropping into the CLI."
+            "Choose one source, add session-only credentials if needed, run a read-only scan, then review grouped campaigns and export reports."
         )
+        st.caption("Start simple: `Providers` for log platforms, `Platforms & Targets` for SaaS/URI scans, or `Files` for local artifacts.")
     with top_right:
         baseline_upload = st.file_uploader(
-            "Optional baseline artifact",
+            "Optional compare-to baseline",
             type=["json", "zip"],
             key="baseline-uploader",
             help="Upload a prior safe scan JSON, baseline JSON, or evidence pack zip to compare new vs unchanged findings.",
         )
 
     remote_tab, target_tab, upload_tab, guide_tab = st.tabs(
-        ["Remote Provider", "Target / URI", "Upload File", "Least Privilege"]
+        ["Providers", "Platforms & Targets", "Files", "Least Privilege"]
     )
 
     with remote_tab:
@@ -127,7 +128,7 @@ def _render_sidebar() -> tuple[bool, bool, str | None]:
     )
     recipe_options = [""] + [recipe.recipe_id for recipe in list_recipes()]
     selected_recipe = sidebar.selectbox(
-        "Hunt recipe",
+        "Optional hunt recipe",
         options=recipe_options,
         format_func=lambda value: "All findings" if not value else value,
         key="selected_recipe",
@@ -139,7 +140,7 @@ def _render_sidebar() -> tuple[bool, bool, str | None]:
             sidebar.caption(recipe.description)
     result = st.session_state.get("scan_result")
     if isinstance(result, ScanResult):
-        sidebar.markdown("#### Active Scan")
+        sidebar.markdown("#### Current Result")
         sidebar.write(f"Source: `{result.source}`")
         sidebar.write(f"Records: `{result.records_scanned}`")
         sidebar.write(f"Findings: `{len(result.findings)}`")
@@ -147,7 +148,7 @@ def _render_sidebar() -> tuple[bool, bool, str | None]:
     if history:
         sidebar.markdown("#### Recent Runs")
         sidebar.dataframe(history[:8], use_container_width=True, hide_index=True)
-    sidebar.caption("Credentials entered here stay in the current Streamlit session only.")
+    sidebar.caption("Credentials entered in this app stay in the current Streamlit session only.")
     return show_raw_values, export_raw_values, selected_recipe or None
 
 
@@ -922,11 +923,28 @@ def _render_result(
     export_raw_values: bool = False,
     selected_recipe: str | None = None,
 ) -> None:
-    _render_scan_details(result)
-    st.subheader("Overview")
+    st.subheader("2. Review Results")
+    st.caption("Stay in `Campaigns` for the simple view. Drop into `Details` only when you need provider response data or the full graph.")
+    summary_tab, campaigns_tab, reports_tab, details_tab = st.tabs(["Summary", "Campaigns", "Reports", "Details"])
+    diff = build_diff_summary(result)
+    with summary_tab:
+        _render_summary_tab(result, diff, selected_recipe)
+    with campaigns_tab:
+        report_result = _render_campaigns_tab(result, diff, show_raw_values=show_raw_values)
+    with reports_tab:
+        _render_reports(report_result, unsafe_show_values=export_raw_values, include_values_in_graph=show_raw_values)
+    with details_tab:
+        _render_details_tab(result, show_raw_values=show_raw_values)
+
+
+def _render_summary_tab(result: ScanResult, diff, selected_recipe: str | None) -> None:
     meta_col, action_col = st.columns([1.25, 1])
     with meta_col:
         st.caption(f"Source: `{result.source}` | Records scanned: `{result.records_scanned}` | Findings: `{len(result.findings)}`")
+        if selected_recipe:
+            recipe = get_recipe(selected_recipe)
+            if recipe is not None:
+                st.caption(f"Hunt recipe: `{recipe.title}`")
     with action_col:
         st.download_button(
             "Download Baseline Artifact",
@@ -940,28 +958,21 @@ def _render_result(
             file_name="hunt-artifact.json",
             mime="application/json",
         )
-        if selected_recipe:
-            recipe = get_recipe(selected_recipe)
-            if recipe is not None:
-                st.caption(f"Recipe: `{recipe.title}`")
     _render_severity_cards(result)
-    diff = build_diff_summary(result)
     if diff.active:
         _render_diff_cards(diff)
 
     overview_left, overview_right = st.columns(2)
     with overview_left:
-        st.markdown("#### Exploitability Ladder")
-        ladder_rows = [
-            {"priority": priority, "count": count}
-            for priority, count in exploitability_counts(result.findings)
-        ]
-        st.dataframe(ladder_rows or [{"priority": "P4", "count": 0}], use_container_width=True)
-        st.markdown("#### Source Metadata")
-        st.json(result.metadata)
         st.markdown("#### Triage Queue")
         triage_rows = top_triage_rows(result.findings)
-        st.dataframe(triage_rows or [{"priority": "P4", "score": 0, "bucket": "backlog", "severity": "low", "type": "none", "source": result.source, "record_id": "-", "summary": "No findings"}], use_container_width=True)
+        st.dataframe(
+            triage_rows or [{"priority": "P4", "score": 0, "bucket": "backlog", "severity": "low", "type": "none", "source": result.source, "record_id": "-", "summary": "No findings"}],
+            use_container_width=True,
+        )
+        st.markdown("#### Exploitability")
+        ladder_rows = [{"priority": priority, "count": count} for priority, count in exploitability_counts(result.findings)]
+        st.dataframe(ladder_rows or [{"priority": "P4", "count": 0}], use_container_width=True)
         hunt_summary = result.metadata.get("hunt_summary", {})
         if isinstance(hunt_summary, dict) and hunt_summary:
             st.markdown("#### Hunt Delta")
@@ -969,48 +980,21 @@ def _render_result(
                 f"New exposures: `{hunt_summary.get('new_clusters', 0)}` | Existing: `{hunt_summary.get('existing_clusters', 0)}` | Resolved: `{hunt_summary.get('resolved_clusters', 0)}`"
             )
     with overview_right:
-        st.markdown("#### Top Entity Families")
-        entity_rows = [
-            {"entity": entity, "count": count}
-            for entity, count in top_entity_families(result.findings)
-        ]
-        st.dataframe(entity_rows or [{"entity": "None", "count": 0}], use_container_width=True)
-        if diff.active:
-            st.markdown("#### Baseline Status")
-            st.write(f"New: `{diff.new}` | Unchanged: `{diff.unchanged}` | Resolved: `{diff.resolved}`")
-        st.markdown("#### Asset Mapping")
-        asset_rows = [
-            {
-                "asset": str(finding.context.get("asset_summary", "unknown")),
-                "priority": str(finding.context.get("exploitability_priority", "P4")),
-                "source": finding.source,
-            }
-            for finding in result.findings[:10]
-        ]
-        st.dataframe(asset_rows or [{"asset": "unknown", "priority": "P4", "source": result.source}], use_container_width=True)
-        st.markdown("#### Top Growing Campaigns")
+        st.markdown("#### Top Campaigns")
         growing_rows = top_growing_clusters(result)
         st.dataframe(
             growing_rows or [{"cluster": "None", "priority": "P4", "severity": "low", "seen_count": 0, "source_count": 0, "asset_count": 0, "first_seen": "", "last_seen": ""}],
             use_container_width=True,
         )
+        st.markdown("#### Top Entity Families")
+        entity_rows = [{"entity": entity, "count": count} for entity, count in top_entity_families(result.findings)]
+        st.dataframe(entity_rows or [{"entity": "None", "count": 0}], use_container_width=True)
+        st.markdown("#### Asset Snapshot")
+        st.dataframe(_asset_rows(result) or [{"asset": "unknown", "priority": "P4", "source": result.source}], use_container_width=True)
 
-    st.subheader("Exposure Graph")
-    graph = build_exposure_graph(result.findings, include_values=show_raw_values)
-    graph_meta = graph.metadata
-    graph_cols = st.columns(4)
-    graph_cols[0].metric("Nodes", graph_meta.get("nodes", 0))
-    graph_cols[1].metric("Edges", graph_meta.get("edges", 0))
-    graph_cols[2].metric("Repeated Entities", graph_meta.get("repeated_entities", 0))
-    graph_cols[3].metric("Findings Visualized", graph_meta.get("findings_visualized", 0))
-    if hasattr(st, "graphviz_chart"):
-        st.graphviz_chart(graph.to_graphviz(), use_container_width=True)
-    else:
-        st.markdown("```dot\n%s\n```" % graph.to_graphviz())
-    with st.expander("Exposure graph data"):
-        st.json(graph.to_dict())
 
-    st.subheader("Findings")
+def _render_campaigns_tab(result: ScanResult, diff, *, show_raw_values: bool) -> ScanResult:
+    st.caption("Grouped campaigns are the default view. Switch to raw findings only when you need record-level confirmation.")
     default_statuses = ["current"]
     if diff.active:
         default_statuses = ["new", "existing", "current"]
@@ -1029,14 +1013,15 @@ def _render_result(
         )
     with controls[2]:
         selected_statuses = st.multiselect(
-            "Baseline / Hunt status",
+            "Status",
             options=["new", "existing", "current"],
             default=default_statuses,
         )
     with controls[3]:
-        grouped_view = st.checkbox("Grouped View", value=True)
+        view_mode = st.selectbox("View", options=["Campaigns", "Raw Findings"])
     with controls[4]:
         text_filter = st.text_input("Search", value="")
+    grouped_view = view_mode == "Campaigns"
 
     filtered_findings = [
         finding
@@ -1051,12 +1036,11 @@ def _render_result(
     ]
     if not filtered_findings:
         st.warning("No findings match the current filters.")
-        report_result = _filtered_result(result, filtered_findings)
-        _render_reports(report_result, unsafe_show_values=export_raw_values)
-        return
+        return _filtered_result(result, filtered_findings)
 
     if grouped_view:
         groups = group_findings(filtered_findings)
+        st.caption(f"Showing `{len(groups)}` grouped campaign(s) from `{len(filtered_findings)}` finding(s).")
         rows = build_findings_rows(groups, include_values=show_raw_values)
         findings_left, findings_right = st.columns([1.25, 1])
         with findings_left:
@@ -1070,6 +1054,7 @@ def _render_result(
             _render_group_detail(next(group for group in groups if group.key == selected_group), show_raw_values)
         report_result = _filtered_result(result, filtered_findings)
     else:
+        st.caption(f"Showing `{len(filtered_findings)}` raw finding(s).")
         rows = _finding_rows(filtered_findings, include_values=show_raw_values)
         findings_left, findings_right = st.columns([1.25, 1])
         with findings_left:
@@ -1089,8 +1074,31 @@ def _render_result(
                 show_raw_values,
             )
         report_result = _filtered_result(result, filtered_findings)
+    return report_result
 
-    _render_reports(report_result, unsafe_show_values=export_raw_values, include_values_in_graph=show_raw_values)
+
+def _render_details_tab(result: ScanResult, *, show_raw_values: bool) -> None:
+    _render_scan_details(result)
+    with st.expander("Exposure Graph", expanded=False):
+        _render_exposure_graph(result, show_raw_values=show_raw_values)
+    with st.expander("Full Metadata", expanded=False):
+        st.json(result.metadata)
+
+
+def _render_exposure_graph(result: ScanResult, *, show_raw_values: bool) -> None:
+    graph = build_exposure_graph(result.findings, include_values=show_raw_values)
+    graph_meta = graph.metadata
+    graph_cols = st.columns(4)
+    graph_cols[0].metric("Nodes", graph_meta.get("nodes", 0))
+    graph_cols[1].metric("Edges", graph_meta.get("edges", 0))
+    graph_cols[2].metric("Repeated Entities", graph_meta.get("repeated_entities", 0))
+    graph_cols[3].metric("Findings Visualized", graph_meta.get("findings_visualized", 0))
+    if hasattr(st, "graphviz_chart"):
+        st.graphviz_chart(graph.to_graphviz(), use_container_width=True)
+    else:
+        st.markdown("```dot\n%s\n```" % graph.to_graphviz())
+    with st.expander("Graph JSON", expanded=False):
+        st.json(graph.to_dict())
 
 
 def _render_reports(result: ScanResult, unsafe_show_values: bool, include_values_in_graph: bool = False) -> None:
@@ -1297,6 +1305,22 @@ def _dedupe_log_records(records):
     return deduped
 
 
+def _asset_rows(result: ScanResult, limit: int = 8) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    seen_assets: set[tuple[str, str, str]] = set()
+    for finding in result.findings:
+        asset = str(finding.context.get("asset_summary", "unknown"))
+        priority = str(finding.context.get("exploitability_priority", "P4"))
+        key = (asset, priority, finding.source)
+        if key in seen_assets:
+            continue
+        seen_assets.add(key)
+        rows.append({"asset": asset, "priority": priority, "source": finding.source})
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def _finding_rows(findings: list[Finding], *, include_values: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for finding in findings:
@@ -1393,8 +1417,8 @@ def _render_hero() -> None:
         f"""
         <div class="plh-hero">
           <p class="plh-kicker">PII Leak Hunter</p>
-          <h1>Operator-grade leak hunting with actual scan controls, not just a thin demo shell.</h1>
-          <p class="plh-copy">Configure providers in-session, scan remote platforms or URI targets, watch scan progress, compare against baselines, and export a polished audit report without exposing raw secrets by default.</p>
+          <h1>Scan internal systems for secrets, PII, and risky exposure patterns.</h1>
+          <p class="plh-copy">Pick a provider or platform, add session-only credentials, run a read-only scan, review grouped campaigns, and export an audit report. Keep it simple unless you need the deeper details.</p>
           <div class="plh-meta">
             <span>v{__version__}</span>
             <span>{DIFF_SIGNATURE_FAMILY_COUNT} diff signature families</span>

@@ -117,6 +117,6 @@ def test_cli_version_surface_is_visible() -> None:
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert "PII Leak Hunter v7.0.0" in result.stdout
+    assert "PII Leak Hunter v7.1.0" in result.stdout
     assert "https://github.com/efij/pii-leak-hunter" in result.stdout
-    assert "Hunt diff signatures: 30 families" in result.stdout
+    assert "Hunt diff signatures: 50 families" in result.stdout

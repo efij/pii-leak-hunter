@@ -33,7 +33,7 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - **Campaign clustering** so repeated leaks across systems collapse into one investigation case
 - **Secret validation** with offline checks and read-only provider validation hooks where supported
 - **Live Hunt mode** with safe hunt artifacts and diff-based reruns
-- **30 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, assets, sources, first/last-seen day, severity, priority, blast radius, provider family, and validation state
+- **50 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, spread, asset drift, source drift, priority/severity shifts, blast radius, provider family, and validation state
 - **Static HTML audit report** with masked evidence, exploitability ladder, and print-friendly layout
 - Output formats:
   - JSON
@@ -123,7 +123,7 @@ pii-leak-hunter --version
 
 The CLI prints the current version, repo URL, and hunt diff signature pack summary. The Streamlit UI hero and sidebar also show the current version plus a direct repository link.
 
-The hunt diff pack now tracks 30 practical signature families, including:
+The hunt diff pack now tracks 50 practical signature families, including:
 - exact campaign identity
 - repeated secret hashes
 - entity type + hash
@@ -132,13 +132,23 @@ The hunt diff pack now tracks 30 practical signature families, including:
 - campaign type + asset
 - campaign type + source
 - campaign priority and severity
+- campaign seen-count bucket
+- campaign asset-count bucket
+- campaign source-count bucket
 - asset + environment
 - asset + source
+- asset + provider family
+- asset + validation class
 - blast radius
 - provider family
 - validation family + classification
 - first-seen day
 - last-seen day
+- source + priority
+- source + severity
+- finding type + asset
+- entity type + priority
+- entity type + severity
 
 ### 1. Install
 

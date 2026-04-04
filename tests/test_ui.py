@@ -42,6 +42,9 @@ def test_ui_render_smoke(monkeypatch) -> None:
                 size = len(count)
             return [FakeColumn() for _ in range(size)]
 
+        def tabs(self, labels):
+            return [FakeColumn() for _ in labels]
+
         def multiselect(self, *args, **kwargs):
             if "Severity" in args:
                 return ["critical", "high", "medium", "low"]
@@ -70,7 +73,7 @@ def test_ui_render_smoke(monkeypatch) -> None:
         def subheader(self, value):
             calls.append(f"subheader:{value}")
 
-        def expander(self, value):
+        def expander(self, value, **kwargs):
             calls.append(f"expander-title:{value}")
             return FakeExpander()
 
@@ -193,3 +196,10 @@ def test_finding_rows_can_show_raw_values() -> None:
     rows = app_module._finding_rows([finding], include_values=True)
 
     assert rows[0]["preview"] == "user@example.invalid"
+
+
+def test_hunts_package_exports_diff_signature_families() -> None:
+    hunts_module = importlib.import_module("pii_leak_hunter.hunts")
+
+    assert hasattr(hunts_module, "DIFF_SIGNATURE_FAMILIES")
+    assert len(hunts_module.DIFF_SIGNATURE_FAMILIES) >= 50
