@@ -33,7 +33,7 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - **Campaign clustering** so repeated leaks across systems collapse into one investigation case
 - **Secret validation** with offline checks and read-only provider validation hooks where supported
 - **Live Hunt mode** with safe hunt artifacts and diff-based reruns
-- **50 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, spread, asset drift, source drift, priority/severity shifts, blast radius, provider family, and validation state
+- **65 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, spread, asset drift, source drift, environment drift, provider-family drift, validation drift, and priority/severity shifts
 - **Static HTML audit report** with masked evidence, exploitability ladder, and print-friendly layout
 - Output formats:
   - JSON
@@ -123,12 +123,17 @@ pii-leak-hunter --version
 
 The CLI prints the current version, repo URL, and hunt diff signature pack summary. The Streamlit UI hero and sidebar also show the current version plus a direct repository link.
 
-The hunt diff pack now tracks 50 practical signature families, including:
+The hunt diff pack now tracks 65 practical signature families, including:
 - exact campaign identity
 - repeated secret hashes
+- campaign hash-count bucket
 - entity type + hash
 - entity type + source
 - entity type + asset
+- entity type + environment
+- entity type + blast radius
+- entity type + provider family
+- entity type + validation class
 - campaign type + asset
 - campaign type + source
 - campaign priority and severity
@@ -139,9 +144,19 @@ The hunt diff pack now tracks 50 practical signature families, including:
 - asset + source
 - asset + provider family
 - asset + validation class
+- asset + finding type
+- asset + source + priority
+- asset + source + severity
 - blast radius
 - provider family
 - validation family + classification
+- source + provider family
+- source + validation class
+- finding type + provider family
+- finding type + validation class
+- finding type + blast radius
+- environment + priority
+- environment + severity
 - first-seen day
 - last-seen day
 - source + priority

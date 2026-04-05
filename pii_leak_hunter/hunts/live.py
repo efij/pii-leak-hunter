@@ -25,6 +25,7 @@ DIFF_SIGNATURE_FAMILIES = (
     "cluster_asset_count_bucket",
     "cluster_source_count_bucket",
     "cluster_seen_count_bucket",
+    "cluster_hash_count_bucket",
     "cluster_priority_severity",
     "cluster_type_asset_count",
     "cluster_type_source_count",
@@ -38,6 +39,10 @@ DIFF_SIGNATURE_FAMILIES = (
     "entity_type_asset_source",
     "entity_type_priority",
     "entity_type_severity",
+    "entity_type_environment",
+    "entity_type_blast_radius",
+    "entity_type_provider_family",
+    "entity_type_validation_classification",
     "asset_key",
     "asset_source",
     "asset_environment",
@@ -46,15 +51,25 @@ DIFF_SIGNATURE_FAMILIES = (
     "asset_blast_radius",
     "asset_provider_family",
     "asset_validation_classification",
+    "asset_finding_type",
+    "asset_source_priority",
+    "asset_source_severity",
     "blast_radius",
     "validation_classification",
     "validation_family_classification",
     "provider_family",
+    "source_provider_family",
+    "source_validation_classification",
     "finding_type_source",
     "finding_type_asset",
     "finding_type_environment",
     "finding_type_priority",
     "finding_type_severity",
+    "finding_type_provider_family",
+    "finding_type_validation_classification",
+    "finding_type_blast_radius",
+    "environment_priority",
+    "environment_severity",
     "source_priority",
     "source_severity",
 )
@@ -198,6 +213,7 @@ def build_diff_signatures(result: ScanResult) -> dict[str, set[str]]:
         source_count_bucket = _count_bucket(int(timeline.get("source_count", len(sources) or 0)))
         asset_count_bucket = _count_bucket(int(timeline.get("asset_count", len(assets) or 0)))
         seen_count_bucket = _count_bucket(int(cluster.get("seen_count", 0)))
+        hash_count_bucket = _count_bucket(len(hashes))
         signatures["cluster_exact"].add(_cluster_signature(cluster))
         if hashes:
             signatures["cluster_hashes"].add(f"{finding_type}|{','.join(hashes)}")
@@ -237,6 +253,8 @@ def build_diff_signatures(result: ScanResult) -> dict[str, set[str]]:
             signatures["cluster_type_source_count"].add(f"{finding_type}|{source_count_bucket}")
         if seen_count_bucket:
             signatures["cluster_seen_count_bucket"].add(f"{finding_type}|{seen_count_bucket}")
+        if hash_count_bucket:
+            signatures["cluster_hash_count_bucket"].add(f"{finding_type}|{hash_count_bucket}")
         validations = cluster.get("validation", [])
         if isinstance(validations, list):
             for item in validations:
@@ -266,6 +284,10 @@ def _finding_diff_signatures(finding) -> dict[str, set[str]]:
         "entity_type_asset_source": set(),
         "entity_type_priority": set(),
         "entity_type_severity": set(),
+        "entity_type_environment": set(),
+        "entity_type_blast_radius": set(),
+        "entity_type_provider_family": set(),
+        "entity_type_validation_classification": set(),
         "asset_key": set(),
         "asset_source": set(),
         "asset_environment": set(),
@@ -274,15 +296,25 @@ def _finding_diff_signatures(finding) -> dict[str, set[str]]:
         "asset_blast_radius": set(),
         "asset_provider_family": set(),
         "asset_validation_classification": set(),
+        "asset_finding_type": set(),
+        "asset_source_priority": set(),
+        "asset_source_severity": set(),
         "blast_radius": set(),
         "validation_classification": set(),
         "validation_family_classification": set(),
         "provider_family": set(),
+        "source_provider_family": set(),
+        "source_validation_classification": set(),
         "finding_type_source": set(),
         "finding_type_asset": set(),
         "finding_type_environment": set(),
         "finding_type_priority": set(),
         "finding_type_severity": set(),
+        "finding_type_provider_family": set(),
+        "finding_type_validation_classification": set(),
+        "finding_type_blast_radius": set(),
+        "environment_priority": set(),
+        "environment_severity": set(),
         "source_priority": set(),
         "source_severity": set(),
     }
@@ -299,14 +331,20 @@ def _finding_diff_signatures(finding) -> dict[str, set[str]]:
         signatures["asset_key"].add(asset_summary)
         signatures["asset_source"].add(f"{asset_summary}|{finding.source}")
     effective_asset = asset_key or asset_summary
+    priority = str(finding.context.get("exploitability_priority", ""))
     if environment:
         signatures["asset_environment"].add(f"{finding.type}|{environment}")
         signatures["finding_type_environment"].add(f"{finding.type}|{environment}")
-    priority = str(finding.context.get("exploitability_priority", ""))
+        if priority:
+            signatures["environment_priority"].add(f"{environment}|{priority}")
+        if finding.severity:
+            signatures["environment_severity"].add(f"{environment}|{finding.severity}")
     if effective_asset and priority:
         signatures["asset_priority"].add(f"{effective_asset}|{priority}")
+        signatures["asset_source_priority"].add(f"{effective_asset}|{finding.source}|{priority}")
     if effective_asset and finding.severity:
         signatures["asset_severity"].add(f"{effective_asset}|{finding.severity}")
+        signatures["asset_source_severity"].add(f"{effective_asset}|{finding.source}|{finding.severity}")
         signatures["finding_type_severity"].add(f"{finding.type}|{finding.severity}")
         signatures["source_severity"].add(f"{finding.source}|{finding.severity}")
     if priority:
@@ -315,11 +353,13 @@ def _finding_diff_signatures(finding) -> dict[str, set[str]]:
     blast_radius = str(finding.context.get("blast_radius", ""))
     if blast_radius:
         signatures["blast_radius"].add(f"{finding.type}|{blast_radius}")
+        signatures["finding_type_blast_radius"].add(f"{finding.type}|{blast_radius}")
         if effective_asset:
             signatures["asset_blast_radius"].add(f"{effective_asset}|{blast_radius}")
     signatures["finding_type_source"].add(f"{finding.type}|{finding.source}")
     if effective_asset:
         signatures["finding_type_asset"].add(f"{finding.type}|{effective_asset}")
+        signatures["asset_finding_type"].add(f"{effective_asset}|{finding.type}")
     validations = finding.context.get("validation", [])
     if isinstance(validations, list):
         for item in validations:
@@ -330,14 +370,19 @@ def _finding_diff_signatures(finding) -> dict[str, set[str]]:
             family = str(item.get("provider_family", ""))
             if entity_type and classification:
                 signatures["validation_classification"].add(f"{entity_type}|{classification}")
+                signatures["finding_type_validation_classification"].add(f"{finding.type}|{classification}")
                 if effective_asset:
                     signatures["asset_validation_classification"].add(f"{effective_asset}|{classification}")
             if family and classification:
                 signatures["validation_family_classification"].add(f"{family}|{classification}")
             if family:
                 signatures["provider_family"].add(family)
+                signatures["source_provider_family"].add(f"{finding.source}|{family}")
+                signatures["finding_type_provider_family"].add(f"{finding.type}|{family}")
                 if effective_asset:
                     signatures["asset_provider_family"].add(f"{effective_asset}|{family}")
+            if classification:
+                signatures["source_validation_classification"].add(f"{finding.source}|{classification}")
     for entity in finding.entities:
         signatures["entity_hash"].add(entity.value_hash[:12])
         signatures["entity_type_hash"].add(f"{entity.entity_type}|{entity.value_hash[:12]}")
@@ -346,9 +391,23 @@ def _finding_diff_signatures(finding) -> dict[str, set[str]]:
             signatures["entity_type_priority"].add(f"{entity.entity_type}|{priority}")
         if finding.severity:
             signatures["entity_type_severity"].add(f"{entity.entity_type}|{finding.severity}")
+        if environment:
+            signatures["entity_type_environment"].add(f"{entity.entity_type}|{environment}")
+        if blast_radius:
+            signatures["entity_type_blast_radius"].add(f"{entity.entity_type}|{blast_radius}")
         if effective_asset:
             signatures["entity_type_asset"].add(f"{entity.entity_type}|{effective_asset}")
             signatures["entity_type_asset_source"].add(f"{entity.entity_type}|{effective_asset}|{finding.source}")
+        if isinstance(validations, list):
+            for item in validations:
+                if not isinstance(item, dict):
+                    continue
+                family = str(item.get("provider_family", ""))
+                classification = str(item.get("classification", ""))
+                if family:
+                    signatures["entity_type_provider_family"].add(f"{entity.entity_type}|{family}")
+                if classification:
+                    signatures["entity_type_validation_classification"].add(f"{entity.entity_type}|{classification}")
     return signatures
 
 

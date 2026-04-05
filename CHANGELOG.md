@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [7.2.0] - 2026-04-05
+
+### Added
+- 15 more practical hunt diff signature families, bringing the pack to 65. The new signatures cover campaign hash complexity, entity/provider drift, entity/validation drift, source/provider drift, source/validation drift, asset/finding-type drift, source-aware asset severity shifts, and environment-aware drift.
+
+### Changed
+- Hunt reruns now surface more investigator-useful movement such as a leak family shifting environments, the same source beginning to carry a different provider family, or an existing asset starting to show a more dangerous finding type.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
 ## [7.1.0] - 2026-04-04
 
 ### Added
