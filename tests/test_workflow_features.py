@@ -688,7 +688,7 @@ def test_build_diff_signatures_exposes_many_signature_families() -> None:
 
     signatures = build_diff_signatures(result)
 
-    assert len(signatures) == 65
+    assert len(signatures) == 80
     assert "cluster_exact" in signatures
     assert "validation_classification" in signatures
     assert "asset_environment" in signatures
@@ -698,3 +698,5 @@ def test_build_diff_signatures_exposes_many_signature_families() -> None:
     assert "asset_provider_family" in signatures
     assert "source_validation_classification" in signatures
     assert "finding_type_provider_family" in signatures
+    assert "entity_type_source_provider_family" in signatures
+    assert "asset_environment_provider_family" in signatures

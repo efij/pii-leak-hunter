@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses semantic versioning.
 
+## [7.3.0] - 2026-04-17
+
+### Added
+- 15 more practical hunt diff signature families, bringing the pack to 80. The new signatures focus on source-aware and asset-aware drift, including source/provider changes, source/blast-radius changes, asset/environment/provider combinations, provider-family severity drift, and source-aware entity movement.
+
+### Changed
+- Hunt reruns now make it easier to spot when a known leak family moves to a more dangerous source, starts showing up under a different provider family, or begins clustering around a higher-risk asset/environment combination.
+
+### Verification
+- `.venv312/bin/python -m pytest`
+- `.venv312/bin/python -m compileall pii_leak_hunter tests`
+
 ## [7.2.0] - 2026-04-05
 
 ### Added

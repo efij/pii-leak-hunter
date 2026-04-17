@@ -202,4 +202,4 @@ def test_hunts_package_exports_diff_signature_families() -> None:
     hunts_module = importlib.import_module("pii_leak_hunter.hunts")
 
     assert hasattr(hunts_module, "DIFF_SIGNATURE_FAMILIES")
-    assert len(hunts_module.DIFF_SIGNATURE_FAMILIES) >= 65
+    assert len(hunts_module.DIFF_SIGNATURE_FAMILIES) >= 80

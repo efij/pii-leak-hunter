@@ -33,7 +33,7 @@ It helps security, AppSec, SecOps, DevSecOps and platform teams identify what sh
 - **Campaign clustering** so repeated leaks across systems collapse into one investigation case
 - **Secret validation** with offline checks and read-only provider validation hooks where supported
 - **Live Hunt mode** with safe hunt artifacts and diff-based reruns
-- **65 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, spread, asset drift, source drift, environment drift, provider-family drift, validation drift, and priority/severity shifts
+- **80 diff signature families** so hunts can detect meaningful changes across campaigns, hashes, spread, asset drift, source drift, environment drift, provider-family drift, validation drift, and asset/source severity drift
 - **Static HTML audit report** with masked evidence, exploitability ladder, and print-friendly layout
 - Output formats:
   - JSON
@@ -123,7 +123,7 @@ pii-leak-hunter --version
 
 The CLI prints the current version, repo URL, and hunt diff signature pack summary. The Streamlit UI hero and sidebar also show the current version plus a direct repository link.
 
-The hunt diff pack now tracks 65 practical signature families, including:
+The hunt diff pack now tracks 80 practical signature families, including:
 - exact campaign identity
 - repeated secret hashes
 - campaign hash-count bucket
@@ -134,12 +134,20 @@ The hunt diff pack now tracks 65 practical signature families, including:
 - entity type + blast radius
 - entity type + provider family
 - entity type + validation class
+- entity type + source + priority
+- entity type + source + severity
+- entity type + source + provider family
 - campaign type + asset
 - campaign type + source
 - campaign priority and severity
 - campaign seen-count bucket
 - campaign asset-count bucket
 - campaign source-count bucket
+- campaign asset + priority
+- campaign asset + severity
+- campaign source + priority
+- campaign source + severity
+- campaign source + provider family
 - asset + environment
 - asset + source
 - asset + provider family
@@ -147,11 +155,18 @@ The hunt diff pack now tracks 65 practical signature families, including:
 - asset + finding type
 - asset + source + priority
 - asset + source + severity
+- asset + environment + priority
+- asset + environment + severity
+- asset + environment + provider family
 - blast radius
 - provider family
+- provider family + priority
+- provider family + severity
 - validation family + classification
 - source + provider family
 - source + validation class
+- source + blast radius
+- source + finding type
 - finding type + provider family
 - finding type + validation class
 - finding type + blast radius
